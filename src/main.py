@@ -1,12 +1,6 @@
 import math
-import networkit as nk
-
-class TimedEdge:
-    def __init__(self, s, d, t):
-        self.s = s
-        self.d = d
-        self.t = t
-        self.next = None
+import networkx as nx
+from collections import deque, defaultdict
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, start_time=0):
@@ -17,68 +11,52 @@ class WindowManager:
         self.start_time = start_time
         self.window_start = start_time
         self.window_end = start_time + window_size
-        self.edges = GraphLinkedList()
+        self.adjacency_list = deque()
         self.graph = graph
+        self.edge_count = defaultdict(int)
         self.algo = algo
-    
+
     def addEdge(self, s, d, t):
+        result = None
         if t < self.window_start:
             return
         if t > self.window_end:
+            result = self.algo(self.graph)
             self.shiftWindow(t)
-        print(f"Adding edge: {s} -> {d}, time: {t}")
-        self.edges.addEdge(s, d, t)
-        self.graph.addEdge(s, d, addMissing=True)
-        self.algo.update(nk.dynamics.GraphEvent(nk.dynamics.GraphEventType.EDGE_ADDITION, s, d, 1.0))
+        self.adjacency_list.append((s, d, t))
+        self.edge_count[(s, d)] += 1
+        self.graph.add_edge(s, d)
         print(f"Edge added: {s} -> {d}, time: {t}")
-        return self.algo.run()
+        print(f"Edge count: {self.edge_count}")
+        return result
     
     def shiftWindow(self, t):
         self.window_start = self.start_time + math.ceil((t - self.start_time - self.window_size) / self.slide) * self.slide
         self.window_end = self.window_start + self.window_size
-        edgesToDelete = self.edges.deleteEdgesBefore(self.window_start)
-        batch = []
-        while edgesToDelete is not None:
-            self.graph.removeEdge(edgesToDelete.s, edgesToDelete.d)
-            batch.append(nk.dynamics.GraphEvent(nk.dynamics.GraphEventType.EDGE_DELETION, edgesToDelete.s, edgesToDelete.d, 1.0))
-            edgesToDelete = edgesToDelete.next
-        self.algo.updateBatch(batch)
+        while self.adjacency_list and self.adjacency_list[0][2] < self.window_start:
+            s, d, edge_t = self.adjacency_list.popleft()
+            self.edge_count[(s, d)] -= 1
+            if self.edge_count[(s, d)] == 0:
+                print(f"Edge removed from graph: {s} -> {d}, time: {edge_t}")
+                self.graph.remove_edge(s, d)
+                if self.graph.degree(s) == 0:
+                    self.graph.remove_node(s)
+                    print(f"Node removed: {s}")
+                if self.graph.degree(d) == 0:
+                    self.graph.remove_node(d)
+                    print(f"Node removed: {d}")
+                del self.edge_count[(s, d)]
+            print(f"Edge removed: {s} -> {d}, time: {edge_t}")
         print(f"Window moved to [{self.window_start}, {self.window_end}]")
-
-class GraphLinkedList:
-    def __init__(self):
-        self.head = None
-        self.tail = None
-    
-    def addEdge(self, s, d, t):
-        edge = TimedEdge(s, d, t)
-        if self.head is None:
-            self.head = edge
-            self.tail = edge
-        else:
-            self.tail.next = edge
-            self.tail = edge
-    
-    def deleteEdgesBefore(self, time):
-        if self.head is None or self.head.t >= time:
-            return None
-        temp = self.head
-        curr = self.head
-        while self.head is not None and self.head.t < time:
-            curr = self.head
-            self.head = self.head.next
-        if self.head is None:
-            self.tail = None
-        curr.next = None
-        return temp
 
 def main():
     print("hello world")
-    f = open("../data/higgs-activity_time_postprocess.txt", "r")
-    g = nk.Graph()
-    dynAPSP = nk.distance.DynAPSP(g)
-    dynAPSP.run()
-    wm = WindowManager(1000, 500, g, dynAPSP) # window size = 1000, slide = 500
+    # f = open("../data/higgs-activity_time_postprocess.txt", "r")
+    f = open("../data/test_graph.txt", "r")
+    g = nx.DiGraph()
+    # algorithm = nx.betweenness_centrality # nx.k_core
+    algorithm = nx.pagerank
+    wm = WindowManager(10, 5, g, algorithm) # window size = 1000, slide = 500
 
     print("start processing edges")
     counter = 0
@@ -88,8 +66,8 @@ def main():
         result = wm.addEdge(int(s), int(d), int(t))
         print(f"Edge added: {s} -> {d}, time: {t}, result: {result}")
         counter += 1
-        if counter >= 1000:
-            print("Processed 1000 edges, stopping.")
+        if counter >= 100:
+            print("Processed 100 edges, stopping.")
             break
 
 if __name__ == "__main__":
