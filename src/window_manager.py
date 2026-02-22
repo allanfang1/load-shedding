@@ -1,5 +1,8 @@
 from collections import deque, defaultdict
 import math
+import time
+import networkx as nx
+import asyncio
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, start_time=0):
@@ -14,13 +17,26 @@ class WindowManager:
         self.graph = graph
         self.edge_count = defaultdict(int)
         self.algo = algo
+        self.window_log = "timing_log.txt"
+        self.algo_log = "algo_log.txt"
+        self.window_log_start_time = time.perf_counter()
 
     def addEdge(self, s, d, t):
         result = None
         if t < self.window_start:
             return
         if t > self.window_end:
-            result = self.algo(self.graph)
+            temp = time.perf_counter()
+            with open(self.window_log, "a") as f:
+                f.write(
+                    f"{self.window_log_start_time}, "
+                    f"{temp}, "
+                    f"{temp - self.window_log_start_time}\n"
+                )
+            self.window_log_start_time = temp
+            snapshot = self.sparsify() # TODO sparsifier
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, self.runAlgo, snapshot)
             self.shiftWindow(t)
         self.adjacency_list.append((s, d, t))
         self.edge_count[(s, d)] += 1
@@ -28,6 +44,25 @@ class WindowManager:
         print(f"Edge added: {s} -> {d}, time: {t}")
         print(f"Edge count: {self.edge_count}")
         return result
+    
+    def sparsify(self): # TODO implement different sparsification strategies
+        self.graph
+        self.adjacency_list
+        return self.graph.copy()
+
+    def runAlgo(self, snapshot):
+        start_time = time.perf_counter()
+        result = self.algo(snapshot)
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+
+        with open(self.algo_log, "a") as f:
+            f.write(
+                f"{start_time}, "
+                f"{end_time}, "
+                f"{elapsed}\n"
+            )
+        # TODO: store or print results
     
     def shiftWindow(self, t):
         self.window_start = self.start_time + math.ceil((t - self.start_time - self.window_size) / self.slide) * self.slide
