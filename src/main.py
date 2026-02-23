@@ -17,11 +17,11 @@ async def main():
     wm.warmStart()
 
     print("start processing edges")
-    counter = 0
+    counter = 1
     async for line in produce(DATA, speed=SPEED):
         print(counter)
         result = wm.addEdge(line.src, line.dst, line.ts)
-        print(f"Edge added: {line.src} -> {line.dst}, time: {line.ts}, result: {result}")
+        # print(f"Edge added: {line.src} -> {line.dst}, time: {line.ts}, result: {result}")
         counter += 1
         if counter >= 100:
             print("Processed 100 edges, stopping.")
