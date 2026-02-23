@@ -10,11 +10,15 @@ async def main():
     # f = open("../data/test_graph.txt", "r")
     g = nx.DiGraph()
     algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
-    wm = WindowManager(10, 5, g, algorithm) # window size = 1000, slide = 500
+    SPEED = 1.0 # multiplier for speed of edge arrival (duration between dataset timestamps)
+    WINDOW_SIZE = 10 # in dataset timestamp units
+    SLIDE = 5 # in dataset timestamp units
+    wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm) # window size = 1000, slide = 500
+    wm.warmStart()
 
     print("start processing edges")
     counter = 0
-    async for line in produce(DATA, speed=1.0):
+    async for line in produce(DATA, speed=SPEED):
         print(counter)
         result = wm.addEdge(line.src, line.dst, line.ts)
         print(f"Edge added: {line.src} -> {line.dst}, time: {line.ts}, result: {result}")
