@@ -71,6 +71,7 @@ class WindowManager:
         self.graph.add_edge(s, d)
         if self.edge_count[(s, d)] == 1:
             self.buckets.addEdge(t)
+
         print(f"Bucket: {self.buckets.getCount(t)} edges in current bucket")
         print(f"Edge added: {s} -> {d}, time: {t}")
         print(f"Edge count: {self.edge_count}")
@@ -79,13 +80,13 @@ class WindowManager:
     def sparsify(self): # TODO implement different sparsification strategies
         self.graph
         self.timed_list
-        return davgSparsify(self.graph, self.graph, 1, self.getAverageDegree())
+        # return davgSparsify(self.graph, self.graph, 1, self.getAverageDegree())
         return self.graph.copy()
 
     def getAverageDegree(self):
         return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
     
-    def modifiedSpectralSparsity(self, s):  # for a -> bdavg * s / min(degAout, degBin)
+    def modifiedSpectralSparsity(self, s):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
         davg = self.getAverageDegree()
         curr = self.timed_list.head
         while curr and curr.t < self.window_start + self.slide:

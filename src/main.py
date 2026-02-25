@@ -10,7 +10,7 @@ async def main():
     # f = open("../data/test_graph.txt", "r")
     g = nx.DiGraph()
     algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
-    SPEED = 1.0 # multiplier for speed of edge arrival (duration between dataset timestamps)
+    SPEED = 1.0 # seconds between edge arrivals (process time)
     WINDOW_SIZE = 10 # in dataset timestamp units
     SLIDE = 5 # in dataset timestamp units
     wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm) # window size = 1000, slide = 500
