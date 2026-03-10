@@ -13,8 +13,9 @@ async def main():
     SPEED = 0.5 # seconds between edge arrivals (process time)
     WINDOW_SIZE = 10 # in dataset timestamp units
     SLIDE = 5 # in dataset timestamp units
-    wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm) # window size = 1000, slide = 500
-    wm.warmStart()
+    SLIDE_BUDGET = SLIDE * SPEED  # wall-clock seconds per processing cycle
+    wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm,
+                        slide_budget=SLIDE_BUDGET)
 
     print("start processing edges")
     counter = 1

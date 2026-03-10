@@ -15,8 +15,8 @@ class Budget:
     def set_ingest(self, cost_per_edge: int, edge_count: int):
         self.ingest = cost_per_edge * edge_count
     
-    def set_expire(self, cost_per_cost: int, edge_count: int):
-        self.expire = cost_per_cost * edge_count
+    def set_expire(self, cost_per_edge: int, edge_count: int):
+        self.expire = cost_per_edge * edge_count
 
     def set_headroom(self, headroom: int):
         self.headroom = headroom
