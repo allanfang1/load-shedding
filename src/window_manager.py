@@ -7,6 +7,8 @@ import asyncio
 from sparsifiers import davgSparsify
 from buckets import Buckets
 from timed_linkedlist import TimedLL, TimedLLNode
+from helper import getAverageDegree
+from system_manager import SystemManager, TimeCard
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, base_time=0):
@@ -37,14 +39,25 @@ class WindowManager:
         self.algo_log = "algo_log.txt"
 
         self.buckets = Buckets(self.base_time, self.slide)
+        self.ingest_buffer = []
+
+        self.sm = SystemManager(window_size, slide)
 
         random.seed(42)
         self.start_time_system = time.perf_counter()
+        self.warmStart()
     
     def warmStart(self):
         self.runAlgo(self.graph)
 
     def addEdge(self, s, d, t):
+        """Add edge (s, d) with timestamp t to the current window, shifting the window if necessary.
+        Includes timing for:
+            - Incremental edge addition is NOT timed 
+            - Burst edge expiration
+            - Algorithm execution
+            - Sparsification
+        """
         if t < self.window_start:
             return
         if t >= self.window_end:
@@ -57,37 +70,51 @@ class WindowManager:
                 )
             self.start_time_system = temp
 
-            # sparsify
-            # algo
+            ### START INGEST TIME ###
+            self.sm.ingest_card = TimeCard(lambda: self.batchAddEdges(self.ingest_buffer), len(self.ingest_buffer))
+            self.ingest_buffer = []
+            ### END INGEST TIME ###
 
-            # snapshot = self.sparsify()
-            # loop = asyncio.get_event_loop()
-            # loop.run_in_executor(None, self.runAlgo, snapshot)
-            self.shiftWindow(t)
+            ### START SPARSIFY TIME ###
+            self.sm.shed_card = TimeCard(lambda: None, 1) # reset time card for next window # TODO count should be number of edges pruned or processed,
+            ### END SPARSIFY TIME ###
+
+            ### START ALGO TIME ###
+            self.sm.algo_card = TimeCard(lambda: self.runAlgo(self.graph), self.graph.number_of_edges()) # reset time card for next window
+            ### END ALGO TIME ###
+
+            ### START EXPIRY TIME ###
+            self.sm.expiry_card = TimeCard() # reset time card for next window
+            self.sm.expiry_card.count = self.shiftWindow(t)
             self.buckets.removeBefore(t)
+            ### END EXPIRY TIME ###
+            self.sm.expiry_card.end = time.perf_counter()
+            
+            self.sm.update_cycle_cost()
         
-        self.timed_list.append(s, d, t)
-        self.edge_count[(s, d)] += 1
-        self.graph.add_edge(s, d)
-        if self.edge_count[(s, d)] == 1:
-            self.buckets.addEdge(t)
+        self.ingest_buffer.append((s, d, t))
 
         print(f"Bucket: {self.buckets.getCount(t)} edges in current bucket")
         print(f"Edge added: {s} -> {d}, time: {t}")
         print(f"Edge count: {self.edge_count}")
         print(f"Timed list size: {self.timed_list.size}")
     
+    def batchAddEdges(self, edges):
+        for s, d, t in edges:
+            self.timed_list.append(s, d, t)
+            self.edge_count[(s, d)] += 1
+            self.graph.add_edge(s, d)
+            if self.edge_count[(s, d)] == 1:
+                self.buckets.addEdge(t)
+
     def sparsify(self): # TODO implement different sparsification strategies
         self.graph
         self.timed_list
         # return davgSparsify(self.graph, self.graph, 1, self.getAverageDegree())
         return self.graph.copy()
-
-    def getAverageDegree(self):
-        return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
     
     def modifiedSpectralSparsity(self, s):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
-        davg = self.getAverageDegree()
+        davg = self.getAverageDegree(self.graph, len(self.edge_count))
         curr = self.timed_list.head
         while curr and curr.t < self.window_start + self.slide:
             denom = min(self.graph.out_degree(curr.src), self.graph.in_degree(curr.dst))
@@ -115,16 +142,20 @@ class WindowManager:
                 f"{elapsed},"
                 f"{result}\n"
             )
+        return result
         # TODO: store or print results
     
     def shiftWindow(self, t):
         self.window_start = self.base_time + math.ceil((t - self.base_time - self.window_size + 1) / self.slide) * self.slide # earliest window that contains the edge, only works for integer timestamps
         self.window_end = self.window_start + self.window_size
+        count = 0
         while self.timed_list and self.timed_list.head.t < self.window_start:
             s, d, edge_t = self.timed_list.popleft()
             self.removeEdge(s, d)
+            count += 1
             print(f"Edge removed: {s} -> {d}, time: {edge_t}")
         print(f"Window moved to [{self.window_start}, {self.window_end}]")
+        return count
     
     def removeEdge(self, s, d):
         self.edge_count[(s, d)] -= 1
@@ -138,6 +169,3 @@ class WindowManager:
                 self.graph.remove_node(d)
                 print(f"Node removed: {d}")
             del self.edge_count[(s, d)]
-    
-    def getEdgeCount(self):
-        return sum(self.edge_count.values())

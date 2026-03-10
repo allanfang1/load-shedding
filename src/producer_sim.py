@@ -24,13 +24,13 @@ import asyncio
 import random
 from typing import AsyncIterator, NamedTuple
 
+# TODO Add spikes
 
 class Edge(NamedTuple):
     src: int
     dst: int
     etype: int
     ts: int
-
 
 async def produce(
     filepath: str,
