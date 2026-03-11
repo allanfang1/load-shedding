@@ -62,7 +62,7 @@ async def produce(
             edge = Edge(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
             
             gap = random.uniform(speed - width, speed + width)  # seconds to sleep
-            print(f"Sleeping for {gap:.2f} seconds")
+            # print(f"Sleeping for {gap:.2f} seconds")
             await asyncio.sleep(gap)
 
             yield edge

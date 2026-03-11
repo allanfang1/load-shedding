@@ -4,7 +4,7 @@ import random
 import time
 import networkx as nx
 import asyncio
-from sparsifiers import davgSparsify
+# from sparsifiers import davgSparsify
 from buckets import Buckets
 from timed_linkedlist import TimedLL, TimedLLNode
 
@@ -29,7 +29,6 @@ class WindowManager:
         self.algo = algo
 
         self.window_start = base_time
-        self.window_end = base_time + window_size
         
         self.timed_list = TimedLL()
         self.edge_count = defaultdict(int)
@@ -37,6 +36,7 @@ class WindowManager:
         self.algo_log = "algo_log.txt"
 
         self.buckets = Buckets(self.base_time, self.slide)
+        self.ingest_buffer = []
 
         random.seed(42)
         self.start_time_system = time.perf_counter()
@@ -47,36 +47,40 @@ class WindowManager:
     def addEdge(self, s, d, t):
         if t < self.window_start:
             return
-        if t >= self.window_end:
-            temp = time.perf_counter()
-            with open(self.window_log, "a") as f:
-                f.write(
-                    f"{self.start_time_system}, "
-                    f"{temp}, "
-                    f"{temp - self.start_time_system}\n"
-                )
-            self.start_time_system = temp
+        print(f"Edge received: {s} -> {d}, time: {t}")
+        self.ingest_buffer.append((s, d, t))
+    
+    def runCompleteWindow(self, close_time):
+        # add remaining edges in buffer
+        print(f"Running complete window at time {close_time - self.window_size} to {close_time} ({self.window_size})")
+        self.batchAddEdges(self.ingest_buffer)
+        self.ingest_buffer = []
 
-            # sparsify
-            # algo
+        # shift window to close_time
+        self.removeBefore(close_time - self.window_size)
 
-            # snapshot = self.sparsify()
-            # loop = asyncio.get_event_loop()
-            # loop.run_in_executor(None, self.runAlgo, snapshot)
-            self.shiftWindow(t)
-            self.buckets.removeBefore(t)
-        
-        self.timed_list.append(s, d, t)
-        self.edge_count[(s, d)] += 1
-        self.graph.add_edge(s, d)
-        if self.edge_count[(s, d)] == 1:
-            self.buckets.addEdge(t)
-
-        print(f"Bucket: {self.buckets.getCount(t)} edges in current bucket")
-        print(f"Edge added: {s} -> {d}, time: {t}")
+        print(f"Bucket: {self.buckets.getCount(close_time - self.window_size)} edges in current bucket")
         print(f"Edge count: {self.edge_count}")
         print(f"Timed list size: {self.timed_list.size}")
-    
+
+        # sparsify
+        # self.modifiedSpectralSparsity(0.5)
+
+        # run algo
+        # self.runAlgo(snapshot)
+        # print(f"Window moved to [{self.window_start}, {self.window_start + self.window_size})")
+
+        self.window_start = close_time - self.window_size + self.slide
+
+    def batchAddEdges(self, edges):
+        for s, d, t in edges:
+            self.timed_list.append(s, d, t)
+            self.edge_count[(s, d)] += 1
+            self.graph.add_edge(s, d)
+            if self.edge_count[(s, d)] == 1:
+                self.buckets.addEdge(t)
+                print(f"Edge added: {s} -> {d}, time: {t}")
+
     def sparsify(self): # TODO implement different sparsification strategies
         self.graph
         self.timed_list
@@ -117,14 +121,12 @@ class WindowManager:
             )
         # TODO: store or print results
     
-    def shiftWindow(self, t):
-        self.window_start = self.base_time + math.ceil((t - self.base_time - self.window_size + 1) / self.slide) * self.slide # earliest window that contains the edge, only works for integer timestamps
-        self.window_end = self.window_start + self.window_size
-        while self.timed_list and self.timed_list.head.t < self.window_start:
+    def removeBefore(self, t):
+        self.buckets.removeBefore(t)
+        while self.timed_list and self.timed_list.head.t < t:
             s, d, edge_t = self.timed_list.popleft()
             self.removeEdge(s, d)
             print(f"Edge removed: {s} -> {d}, time: {edge_t}")
-        print(f"Window moved to [{self.window_start}, {self.window_end}]")
     
     def removeEdge(self, s, d):
         self.edge_count[(s, d)] -= 1

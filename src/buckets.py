@@ -14,8 +14,11 @@ class Buckets:
             self.buckets[-1] = (self.buckets[-1][0], self.buckets[-1][1] + 1)
     
     def getCount(self, time):
+        """Returns the count of edges in the bucket corresponding to `time`.
+        """
         for idx in range(len(self.buckets)):
             if self.buckets[idx][0] <= time and time < self.buckets[idx][0] + self.slide:
+                print(f"Bucket found for time {time}: {self.buckets[idx][0]} to {self.buckets[idx][0] + self.slide}, count: {self.buckets[idx][1]}")
                 return self.buckets[idx][1]
         return None
 
