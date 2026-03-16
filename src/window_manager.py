@@ -7,7 +7,7 @@ import asyncio
 # from sparsifiers import 
 from buckets import Buckets
 from timed_linkedlist import TimedLL, TimedLLNode
-from load_shedder import LoadShedder
+from load_shed_manager import LoadShedManager
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, base_time=0, predictor=None):
@@ -42,8 +42,7 @@ class WindowManager:
         self.buckets = Buckets(self.base_time, self.slide)
         self.ingest_buffer = []
 
-        # Load shedding
-        self.load_shedder = LoadShedder(predictor) if predictor else None
+        self.load_shed_manager = LoadShedManager(predictor) if predictor else None
 
         random.seed(42)
         self.start_time_system = time.perf_counter()
@@ -66,7 +65,7 @@ class WindowManager:
         # shift window to close_time
         self.removeBefore(close_time - self.window_size)
 
-        print(f"Bucket: {self.buckets.getCount(close_time - self.window_size)} edges in current bucket")
+        print(f"Bucket: {close_time - self.window_size} - {self.buckets.getCount(close_time - self.window_size)} edges in current bucket")
         print(f"Edge count: {self.edge_count}")
         print(f"Timed list size: {self.timed_list.size}")
 
@@ -74,11 +73,14 @@ class WindowManager:
 
         # Derive how many edges to shed
         edges_to_shed = 0
-        if self.load_shedder is not None:
-            edges_to_shed = self.load_shedder.edges_to_shed(self.graph, remaining_time)
-            print(f"Load shedder: {edges_to_shed} edges to shed "
+        if self.load_shed_manager is not None:
+            edges_to_shed = self.load_shed_manager.edges_to_shed(self.graph, remaining_time)
+            print(f"Load shed manager: {edges_to_shed} edges to shed "
                   f"(remaining_time={remaining_time:.4f}s, "
                   f"current_edges={self.graph.number_of_edges()})")
+        
+        if edges_to_shed <= self.buckets.getCount(close_time - self.window_size):
+            print(f"Shedding {edges_to_shed} edges from current bucket")
 
         # TODO: apply sparsification / shedding policy to remove `edges_to_shed` edges
         # self.applyShedding(edges_to_shed)
@@ -104,8 +106,15 @@ class WindowManager:
         # return davgSparsify(self.graph, self.graph, 1, self.getAverageDegree())
         return self.graph.copy()
 
-    def getAverageDegree(self):
-        return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
+    def shedBefore(self, t, ):
+        self.buckets.removeBefore(t)
+        while self.timed_list and self.timed_list.head.t < t:
+            s, d, edge_t = self.timed_list.popleft()
+            self.removeEdge(s, d)
+            print(f"Edge removed: {s} -> {d}, time: {edge_t}")
+
+    # def getAverageDegree(self):
+    #     return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
 
     def runAlgo(self, snapshot):
         start_time = time.perf_counter()
@@ -142,5 +151,5 @@ class WindowManager:
                 print(f"Node removed: {d}")
             del self.edge_count[(s, d)]
     
-    def getEdgeCount(self):
-        return sum(self.edge_count.values())
+    # def getEdgeCount(self):
+    #     return sum(self.edge_count.values())
