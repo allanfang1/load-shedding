@@ -2,7 +2,7 @@
 ML-based runtime predictor.
 
 Uses a Random Forest regressor (fast inference, handles non-linear
-relationships, needs minimal tuning).  The trained model + scaler are
+relationships, needs minimal tuning).  The trained model is
 persisted with joblib so prediction is a single cheap call.
 """
 
@@ -91,7 +91,7 @@ class RuntimePredictor:
         """Predict runtime (seconds) from a single feature dict.
 
         This is the hot-path call in a streaming system - it's just
-        a scaler transform + tree traversal, i.e. microseconds.
+        a tree traversal, i.e. microseconds.
         """
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.  Call fit() first.")

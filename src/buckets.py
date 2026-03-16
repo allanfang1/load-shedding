@@ -2,6 +2,7 @@ from collections import deque
 import math
 
 class Buckets:
+    """Maintains edge counts in (slide-sized) time buckets for a sliding window."""
     def __init__(self, base_time, slide):
         self.base_time = base_time
         self.slide = slide
@@ -14,7 +15,7 @@ class Buckets:
             self.buckets[-1] = (self.buckets[-1][0], self.buckets[-1][1] + 1)
     
     def getCount(self, time):
-        """Returns the count of edges in the bucket corresponding to `time`.
+        """Returns the count of edges in the bucket corresponding to `time`. In range [time, time + slide).
         """
         for idx in range(len(self.buckets)):
             if self.buckets[idx][0] <= time and time < self.buckets[idx][0] + self.slide:
@@ -25,3 +26,6 @@ class Buckets:
     def removeBefore(self, time):
         while self.buckets and self.buckets[0][0] + self.slide <= time:
             self.buckets.popleft()
+    
+    def shed(self, time):
+        

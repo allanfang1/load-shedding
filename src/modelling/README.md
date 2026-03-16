@@ -153,7 +153,7 @@ Encapsulates model lifecycle in class `RuntimePredictor`.
   - Computes in-sample `mae` and `r2`.
   - Optional CV MAE metrics when `cv_folds > 0` and enough samples exist.
 - `predict(features_dict)`
-  - Dict → ordered vector → scaled vector → scalar runtime prediction.
+  - Dict → ordered vector → vector → runtime prediction.
 - `predict_batch(X)`
   - Batch inference on matrix input.
 - `feature_importances()`

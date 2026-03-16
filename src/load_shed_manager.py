@@ -19,7 +19,7 @@ from modelling.feature_extraction import features_from_nm
 from modelling.runtime_predictor import RuntimePredictor
 
 
-class LoadShedder:
+class LoadShedManager:
     """Derive the number of edges to shed given a time budget.
 
     Parameters
@@ -95,4 +95,3 @@ class LoadShedder:
 
         edges_to_drop = current_m - target_m
         return max(0, edges_to_drop)
-
