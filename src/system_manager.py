@@ -2,7 +2,7 @@
 import time
 import networkx as nx
 
-# TODO so in theory this class will monitor the system status and apply the correct load shedding accordingly
+# TODO (Sparsification selector) so in theory this class will monitor the system status and apply the correct load shedding accordingly 
 class SystemManager:
     def __init__(self, graph, algo, window_size, slide):
         self.graph = graph

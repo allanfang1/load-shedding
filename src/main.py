@@ -1,11 +1,15 @@
 import time
+import os
 
 import networkx as nx
 from window_manager import WindowManager
 import asyncio
 from producer_sim import produce, Edge
 
+from modelling.runtime_predictor import RuntimePredictor
+
 DATA = "../data/test_graph.txt" # "../data/higgs-activity_time_postprocess.txt"
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "modelling", "models") 
 
 async def window_trigger(wm: WindowManager, slide: float, base: float):
     """Periodically fires the window function every `slide` real seconds."""
@@ -28,7 +32,19 @@ async def main():
     WINDOW_SIZE = 10 # in dataset timestamp units
     SLIDE = 5 # in dataset timestamp units
     base = time.perf_counter()
-    wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm, base_time=base) # window size = 1000, slide = 500
+
+    # Load trained predictor for load shedding (if available)
+    predictor = None
+    if os.path.isdir(MODEL_DIR):
+        try:
+            predictor = RuntimePredictor.load(MODEL_DIR)
+            print(f"Loaded runtime predictor for '{predictor.algorithm_name}' from {MODEL_DIR}")
+        except Exception as e:
+            print(f"Could not load predictor from {MODEL_DIR}: {e}")
+    else:
+        print(f"No trained model found at {MODEL_DIR} — running without load shedding")
+
+    wm = WindowManager(WINDOW_SIZE, SLIDE, g, algorithm, base_time=base, predictor=predictor)
     wm.warmStart()
     
     trigger_task = asyncio.create_task(window_trigger(wm, SLIDE, base))

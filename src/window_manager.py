@@ -4,12 +4,13 @@ import random
 import time
 import networkx as nx
 import asyncio
-# from sparsifiers import davgSparsify
+# from sparsifiers import 
 from buckets import Buckets
 from timed_linkedlist import TimedLL, TimedLLNode
+from load_shedder import LoadShedder
 
 class WindowManager:
-    def __init__(self, window_size, slide, graph, algo, base_time=0):
+    def __init__(self, window_size, slide, graph, algo, base_time=0, predictor=None):
         """
         Parameters
         ----------
@@ -19,6 +20,9 @@ class WindowManager:
             Slide interval in **dataset timestamp units**.
         base_time : int
             First expected timestamp in dataset units.
+        predictor : RuntimePredictor | None
+            Trained ML model for algorithm runtime prediction.
+            When provided, enables automatic load shedding.
         """
         if slide > window_size:
             raise ValueError("slide should be less than or equal to window_size")
@@ -37,6 +41,9 @@ class WindowManager:
 
         self.buckets = Buckets(self.base_time, self.slide)
         self.ingest_buffer = []
+
+        # Load shedding
+        self.load_shedder = LoadShedder(predictor) if predictor else None
 
         random.seed(42)
         self.start_time_system = time.perf_counter()
@@ -63,11 +70,21 @@ class WindowManager:
         print(f"Edge count: {self.edge_count}")
         print(f"Timed list size: {self.timed_list.size}")
 
-        # sparsify
-        # self.modifiedSpectralSparsity(0.5)
+        remaining_time = close_time + self.window_size - time.perf_counter()
+
+        # Derive how many edges to shed
+        edges_to_shed = 0
+        if self.load_shedder is not None:
+            edges_to_shed = self.load_shedder.edges_to_shed(self.graph, remaining_time)
+            print(f"Load shedder: {edges_to_shed} edges to shed "
+                  f"(remaining_time={remaining_time:.4f}s, "
+                  f"current_edges={self.graph.number_of_edges()})")
+
+        # TODO: apply sparsification / shedding policy to remove `edges_to_shed` edges
+        # self.applyShedding(edges_to_shed)
 
         # run algo
-        # self.runAlgo(snapshot)
+        # self.runAlgo(self.graph)
         # print(f"Window moved to [{self.window_start}, {self.window_start + self.window_size})")
 
         self.window_start = close_time - self.window_size + self.slide
@@ -89,22 +106,6 @@ class WindowManager:
 
     def getAverageDegree(self):
         return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
-    
-    def modifiedSpectralSparsity(self, s):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
-        davg = self.getAverageDegree()
-        curr = self.timed_list.head
-        while curr and curr.t < self.window_start + self.slide:
-            denom = min(self.graph.out_degree(curr.src), self.graph.in_degree(curr.dst))
-            p = davg * s / denom if denom > 0 else 0
-
-            temp = curr.next
-            if random.random() >= p:
-                self.timed_list.remove_node(curr) # remove edge from timed_list
-                self.removeEdge(curr.src, curr.dst)
-            curr = temp
-    
-    def randomSparsity(self, s): # TODO
-        pass
 
     def runAlgo(self, snapshot):
         start_time = time.perf_counter()
@@ -119,7 +120,7 @@ class WindowManager:
                 f"{elapsed},"
                 f"{result}\n"
             )
-        # TODO: store or print results
+        # TODO: store or print results - compare to ground truth
     
     def removeBefore(self, t):
         self.buckets.removeBefore(t)
