@@ -11,8 +11,8 @@ The modelling module predicts the runtime of graph algorithms before they execut
 It provides:
 
 1. **Data collection**: run graph algorithms over representative graphs and record observed runtimes.
-2. **Feature engineering**: extract lightweight graph-level features in constant time.
-3. **Model training**: fit a regressor (currently Random Forest) per algorithm.
+2. **Features**: extract (constant time) graph-level features.
+3. **Training**: fit a regressor (Random Forest) per algorithm(s).
 4. **Inference**: predict runtime of a target algorithm on a new graph.
 
 The implementation is intended for low-latency use in streaming environments where prediction overhead must remain negligible compared to algorithm execution.
@@ -25,10 +25,10 @@ The implementation is intended for low-latency use in streaming environments whe
 
 - `main.py` — CLI orchestration (`collect`, `train`, `predict`, `run-all`).
 - `algorithms.py` — algorithm implementations + registry abstraction.
-- `feature_extraction.py` — graph feature extraction and feature-vector ordering.
+- `feature_extraction.py` — graph feature extraction and vectorization.
 - `runtime_predictor.py` — train/predict/persist ML runtime model.
 - `requirements.txt` — Python package dependencies for this module.
-- `models/` — default persisted artifacts (`model.joblib`, `scaler.joblib`, `meta.json`).
+- `models/` — default persisted artifacts (`model.joblib`, `meta.json`).
 
 ---
 
@@ -37,13 +37,13 @@ The implementation is intended for low-latency use in streaming environments whe
 ### 3.1 High-level flow
 
 1. **Graph source**:
-   - From static edge-list files (`--graph-dir`), and/or
-   - From sampled window snapshots over a real stream file (`--sample-file`).
-2. **Feature extraction**: compute fixed feature vector from each graph.
-3. **Timing measurement**: run selected algorithm(s), measure median wall-clock runtime.
-4. **Dataset assembly**: write rows to CSV.
+   - From static edge-list snapshot files (`--graph-dir`), and/or
+   - From edge-list file as a stream (`--sample-file`).
+2. **Feature extraction**: compute feature vector from each graph.
+3. **Timing**: run selected algorithm(s), measure median wall-clock runtime.
+4. **Write**: write data rows to CSV.
 5. **Model fit**: train regressor on feature matrix `X` and runtime target `y`.
-6. **Serialization**: persist model/scaler/metadata.
+6. **Serialization**: persist model/metadata.
 7. **Prediction path**: load artifacts, extract features from new graph, infer runtime.
 
 ### 3.2 Data contracts
@@ -62,7 +62,6 @@ The implementation is intended for low-latency use in streaming environments whe
 **Persisted model artifacts** (`model-dir`):
 
 - `model.joblib` — fitted `RandomForestRegressor`
-- `scaler.joblib` — fitted `StandardScaler`
 - `meta.json` — metadata:
   - `algorithm_name`
   - `feature_names`
@@ -81,12 +80,12 @@ Defines callable graph algorithms and exposes a registry interface.
 - `approx_betweenness_centrality`
 - `pagerank`
 
-Disabled/commented examples:
+Disabled:
 
 - `closeness_centrality`
 - `clustering_coefficient`
 
-### Public registry API
+### API
 
 - `list_algorithms() -> list[str]`
 - `get_algorithm(name: str) -> callable`
@@ -97,10 +96,6 @@ Algorithm functions should:
 
 - Accept a NetworkX graph.
 - Return computed results (dict/list/etc.).
-- Avoid side effects like prints or file I/O.
-- Let caller handle timing externally.
-
-This keeps timing measurements focused on algorithm compute rather than logging overhead.
 
 ---
 
@@ -144,18 +139,17 @@ Encapsulates model lifecycle in class `RuntimePredictor`.
 ### Model choices
 
 - Regressor: `RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)`
-- Preprocessing: `StandardScaler`
 
 ### Why this setup
 
-- Random forests capture non-linear scaling patterns better than simple linear models.
+- Random forests capture non-linear and discontinuous patterns better than simple linear models.
 - Inference is fast enough for online gating decisions.
 - Minimal tuning burden and robust behavior on modest tabular datasets.
 
 ### Main methods
 
 - `fit(X, y, algorithm_name="unknown", cv_folds=0)`
-  - Fits scaler and model.
+  - Fits model.
   - Computes in-sample `mae` and `r2`.
   - Optional CV MAE metrics when `cv_folds > 0` and enough samples exist.
 - `predict(features_dict)`
@@ -297,7 +291,7 @@ Notes:
 3. Re-collect dataset (old CSVs may become schema-incompatible).
 4. Re-train models and overwrite or version artifact directories.
 
-Backward compatibility warning: existing `model.joblib`/`scaler.joblib` may be invalid if feature order or feature set changes.
+Backward compatibility warning: existing `model.joblib` may be invalid if feature order or feature set changes.
 
 ## 7.3 Change model type or hyperparameters
 
@@ -323,7 +317,7 @@ Recommended process:
 
 - Data collection is the expensive stage (actual algorithm runs).
 - Training is moderate cost and parallelized across CPU cores by scikit-learn.
-- Prediction is low-latency (feature extraction + scaler + forest traversal).
+- Prediction is low-latency (feature extraction + forest traversal).
 
 ## 8.3 Failure modes
 
@@ -334,47 +328,7 @@ Recommended process:
 
 ---
 
-## 9) Troubleshooting Checklist
-
-1. **Import issues (`modelling.*`)**
-   - Run from an environment where `src` is import-resolvable (for example running module from package-aware context).
-2. **No graphs discovered**
-   - Verify `--graph-dir` path and `.txt` extension.
-3. **Training errors from invalid runtime values**
-   - Inspect CSV for `NaN` runtime rows and remove/filter before training.
-4. **Poor prediction accuracy**
-   - Increase graph diversity, snapshot count, and include larger windows representative of production load.
-5. **Long collection times**
-   - Use `--algo` for one algorithm at a time, reduce `--num-snapshots`, or cap `--max-edges`.
-
----
-
-## 10) Suggested Contributor Workflow
-
-1. Create or activate a dedicated Python environment.
-2. Install `requirements.txt`.
-3. Run small `collect` with one algorithm and low snapshot count.
-4. Train and inspect feature importances.
-5. Validate `predict` on held-out graphs.
-6. Iterate on feature set/model configuration.
-7. Commit code + updated artifacts/documentation as a coherent unit.
-
----
-
-## 11) Maintenance and Versioning Recommendations
-
-- Treat model artifacts as build outputs tied to code and feature schema.
-- Keep timing datasets versioned (or checksum-tracked) for reproducibility.
-- Introduce explicit schema version in `meta.json` if feature set evolves.
-- Add automated validation checks for:
-  - non-empty datasets,
-  - no-NaN training targets,
-  - artifact loadability,
-  - feature name alignment between code and metadata.
-
----
-
-## 12) Quick Reference
+## 9) Quick Reference
 
 - Main CLI: `python main.py <collect|train|predict|run-all> ...`
 - Algorithms available: `list_algorithms()` in `algorithms.py`
