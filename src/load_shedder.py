@@ -27,7 +27,7 @@ class LoadShedder:
     predictor : RuntimePredictor
         A trained ML model that predicts algorithm runtime from graph features.
     safety_margin : float
-        Fraction of *remaining_time* to reserve as a safety buffer (0–1).
+        Fraction of *remaining_time* to reserve as a safety buffer (0-1).
         E.g. 0.1 means the algorithm must fit in 90 % of the remaining time.
     """
 

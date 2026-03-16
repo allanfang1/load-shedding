@@ -3,10 +3,10 @@ CLI entry point for the graph-runtime prediction pipeline.
 
 Workflow
 -------
-1. **collect**  – Load graph files, run algorithms, measure time, save CSV.
-2. **train**    – Load CSV, train an ML model per algorithm, save model.
-3. **predict**  – Load a saved model + a graph, print predicted runtime.
-4. **run-all**  – Do collect → train end-to-end.
+1. **collect**  - Load graph files, run algorithms, measure time, save CSV.
+2. **train**    - Load CSV, train an ML model per algorithm, save model.
+3. **predict**  - Load a saved model + a graph, print predicted runtime.
+4. **run-all**  - Do collect → train end-to-end.
 
 Usage examples
 --------------
@@ -38,13 +38,22 @@ from pathlib import Path
 import networkx as nx
 import numpy as np
 
-from modelling.algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
-from modelling.feature_extraction import (
-    FEATURE_NAMES,
-    extract_features,
-    features_to_vector,
-)
-from modelling.runtime_predictor import RuntimePredictor
+try:
+    from modelling.algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
+    from modelling.feature_extraction import (
+        FEATURE_NAMES,
+        extract_features,
+        features_to_vector,
+    )
+    from modelling.runtime_predictor import RuntimePredictor
+except ModuleNotFoundError:
+    from algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
+    from feature_extraction import (
+        FEATURE_NAMES,
+        extract_features,
+        features_to_vector,
+    )
+    from runtime_predictor import RuntimePredictor
 
 
 # ======================================================================
@@ -82,7 +91,7 @@ def discover_graph_files(directory: str, extensions: tuple = (".txt",)) -> list[
 
 def sample_window_snapshots(
     filepath: str,
-    num_snapshots: int = 15,
+    num_snapshots: int = 30,
     max_edges: int = 5000,
     directed: bool = True,
 ) -> list[tuple[str, nx.Graph]]:
@@ -125,7 +134,7 @@ def sample_window_snapshots(
     # 2. Pick window boundaries
     #    We want varied graph sizes — log-spaced from a small window up to
     #    max_edges (or total if smaller), so we get both tiny and large snapshots.
-    min_edges = max(10, total // 200)
+    min_edges = max(10, max_edges // 200)
     upper = min(total, max_edges)
     import numpy as _np
     window_sizes = sorted(set(

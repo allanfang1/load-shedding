@@ -45,7 +45,7 @@ def clustering_coefficient(G: nx.Graph) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Registry  –  edit this dict to enable / disable algorithms
+# Registry  -  edit this dict to enable / disable algorithms
 # ---------------------------------------------------------------------------
 
 ALGORITHM_REGISTRY: dict[str, callable] = {

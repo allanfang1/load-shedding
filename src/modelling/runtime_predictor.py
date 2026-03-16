@@ -13,11 +13,13 @@ import json
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import mean_absolute_error, r2_score
 
-from modelling.feature_extraction import FEATURE_NAMES, features_to_vector
+try:
+    from modelling.feature_extraction import FEATURE_NAMES, features_to_vector
+except ModuleNotFoundError:
+    from feature_extraction import FEATURE_NAMES, features_to_vector
 
 
 class RuntimePredictor:
@@ -33,7 +35,6 @@ class RuntimePredictor:
             random_state=random_state,
             n_jobs=-1,          # use all cores for training
         )
-        self.scaler = StandardScaler()
         self._is_fitted = False
         self.algorithm_name: str | None = None
         self.cv_scores: np.ndarray | None = None
@@ -54,7 +55,7 @@ class RuntimePredictor:
         Parameters
         ----------
         X : array of shape (n_samples, n_features)
-        y : array of shape (n_samples,) – runtimes in seconds
+        y : array of shape (n_samples,) - runtimes in seconds
         algorithm_name : stored for later reference
         cv_folds : number of cross-validation folds (0 to skip)
 
@@ -63,11 +64,10 @@ class RuntimePredictor:
         dict with keys: mae, r2, cv_mean, cv_std  (cv_* only if cv_folds > 0)
         """
         self.algorithm_name = algorithm_name
-        X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled, y)
+        self.model.fit(X, y)
         self._is_fitted = True
 
-        y_pred = self.model.predict(X_scaled)
+        y_pred = self.model.predict(X)
         metrics: dict = {
             "mae": float(mean_absolute_error(y, y_pred)),
             "r2": float(r2_score(y, y_pred)),
@@ -75,7 +75,7 @@ class RuntimePredictor:
 
         if cv_folds > 0 and len(y) >= cv_folds:
             self.cv_scores = cross_val_score(
-                self.model, X_scaled, y,
+                self.model, X, y,
                 cv=cv_folds, scoring="neg_mean_absolute_error",
             )
             metrics["cv_mean_mae"] = float(-self.cv_scores.mean())
@@ -90,21 +90,19 @@ class RuntimePredictor:
     def predict(self, features: dict[str, float]) -> float:
         """Predict runtime (seconds) from a single feature dict.
 
-        This is the hot-path call in a streaming system – it's just
+        This is the hot-path call in a streaming system - it's just
         a scaler transform + tree traversal, i.e. microseconds.
         """
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.  Call fit() first.")
         vec = np.array(features_to_vector(features)).reshape(1, -1)
-        vec_scaled = self.scaler.transform(vec)
-        return float(self.model.predict(vec_scaled)[0])
+        return float(self.model.predict(vec)[0])
 
     def predict_batch(self, X: np.ndarray) -> np.ndarray:
         """Predict runtimes for multiple feature vectors at once."""
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.")
-        X_scaled = self.scaler.transform(X)
-        return self.model.predict(X_scaled)
+        return self.model.predict(X)
 
     # ------------------------------------------------------------------
     # Feature importance
@@ -121,10 +119,9 @@ class RuntimePredictor:
     # ------------------------------------------------------------------
 
     def save(self, directory: str) -> None:
-        """Save model, scaler, and metadata to *directory*."""
+        """Save model and metadata to *directory*."""
         os.makedirs(directory, exist_ok=True)
         joblib.dump(self.model, os.path.join(directory, "model.joblib"))
-        joblib.dump(self.scaler, os.path.join(directory, "scaler.joblib"))
         meta = {
             "algorithm_name": self.algorithm_name,
             "feature_names": FEATURE_NAMES,
@@ -137,7 +134,6 @@ class RuntimePredictor:
         """Load a previously saved predictor."""
         predictor = cls()
         predictor.model = joblib.load(os.path.join(directory, "model.joblib"))
-        predictor.scaler = joblib.load(os.path.join(directory, "scaler.joblib"))
         with open(os.path.join(directory, "meta.json")) as f:
             meta = json.load(f)
         predictor.algorithm_name = meta.get("algorithm_name")

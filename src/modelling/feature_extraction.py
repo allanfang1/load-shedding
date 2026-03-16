@@ -19,11 +19,11 @@ def extract_features(G: nx.Graph) -> dict[str, float]:
 
     Features
     --------
-    num_nodes   : int   – number of nodes
-    num_edges   : int   – number of edges
-    density     : float – graph density (0–1)
-    avg_degree  : float – mean degree  (m/n for directed, 2m/n for undirected)
-    is_directed : int   – 1 if directed, 0 otherwise
+    num_nodes   : int   - number of nodes
+    num_edges   : int   - number of edges
+    density     : float - graph density (0-1)
+    avg_degree  : float - mean degree  (m/n for directed, 2m/n for undirected)
+    is_directed : int   - 1 if directed, 0 otherwise
     """
     n = G.number_of_nodes()
     m = G.number_of_edges()
@@ -58,7 +58,7 @@ def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
     }
 
 
-# Ordered list of feature names – used to build consistent feature vectors.
+# Ordered list of feature names - used to build consistent feature vectors.
 FEATURE_NAMES: list[str] = list(features_from_nm(0, 0).keys())
 
 
