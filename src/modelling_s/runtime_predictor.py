@@ -17,9 +17,9 @@ from sklearn.model_selection import cross_val_score
 from sklearn.metrics import mean_absolute_error, r2_score
 
 try:
-    from modelling.feature_extraction import FEATURE_NAMES, features_to_vector
+    from modelling.feature_extraction import FEATURE_NAMES
 except ModuleNotFoundError:
-    from feature_extraction import FEATURE_NAMES, features_to_vector
+    from feature_extraction import FEATURE_NAMES
 
 
 class RuntimePredictor:
@@ -38,6 +38,7 @@ class RuntimePredictor:
         self._is_fitted = False
         self.algorithm_name: str | None = None
         self.cv_scores: np.ndarray | None = None
+        self.feature_names: list[str] = list(FEATURE_NAMES)
 
     # ------------------------------------------------------------------
     # Training
@@ -49,6 +50,7 @@ class RuntimePredictor:
         y: np.ndarray,
         algorithm_name: str = "unknown",
         cv_folds: int = 0,
+        feature_names: list[str] | None = None,
     ) -> dict:
         """Fit the model and return evaluation metrics.
 
@@ -64,6 +66,8 @@ class RuntimePredictor:
         dict with keys: mae, r2, cv_mean, cv_std  (cv_* only if cv_folds > 0)
         """
         self.algorithm_name = algorithm_name
+        if feature_names is not None:
+            self.feature_names = list(feature_names)
         self.model.fit(X, y)
         self._is_fitted = True
 
@@ -95,7 +99,7 @@ class RuntimePredictor:
         """
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.  Call fit() first.")
-        vec = np.array(features_to_vector(features)).reshape(1, -1)
+        vec = np.array([features[k] for k in self.feature_names]).reshape(1, -1)
         return float(self.model.predict(vec)[0])
 
     def predict_batch(self, X: np.ndarray) -> np.ndarray:
@@ -112,7 +116,7 @@ class RuntimePredictor:
         """Return feature name → importance (Gini-based)."""
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.")
-        return dict(zip(FEATURE_NAMES, self.model.feature_importances_))
+        return dict(zip(self.feature_names, self.model.feature_importances_))
 
     # ------------------------------------------------------------------
     # Persistence
@@ -124,7 +128,7 @@ class RuntimePredictor:
         joblib.dump(self.model, os.path.join(directory, "model.joblib"))
         meta = {
             "algorithm_name": self.algorithm_name,
-            "feature_names": FEATURE_NAMES,
+            "feature_names": self.feature_names,
         }
         with open(os.path.join(directory, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
@@ -137,5 +141,6 @@ class RuntimePredictor:
         with open(os.path.join(directory, "meta.json")) as f:
             meta = json.load(f)
         predictor.algorithm_name = meta.get("algorithm_name")
+        predictor.feature_names = meta.get("feature_names", list(FEATURE_NAMES))
         predictor._is_fitted = True
         return predictor

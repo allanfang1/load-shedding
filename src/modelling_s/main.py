@@ -39,21 +39,26 @@ import networkx as nx
 import numpy as np
 
 try:
-    from modelling.algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
-    from modelling.feature_extraction import (
+    from modelling_s.algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
+    from modelling_s.mock_window_manager import MockWindowManager
+    from modelling_s.feature_extraction import (
         FEATURE_NAMES,
         extract_features,
         features_to_vector,
     )
-    from modelling.runtime_predictor import RuntimePredictor
+    from modelling_s.runtime_predictor import RuntimePredictor
 except ModuleNotFoundError:
     from algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
+    from mock_window_manager import MockWindowManager
     from feature_extraction import (
         FEATURE_NAMES,
         extract_features,
         features_to_vector,
     )
     from runtime_predictor import RuntimePredictor
+
+
+S_PREDICT_FEATURE_NAMES = [f"pre_{name}" for name in FEATURE_NAMES] + ["total_time"]
 
 
 # ======================================================================
@@ -142,15 +147,17 @@ def sample_window_snapshots(
     ))
 
     # 3. Build a graph for each window
-    snapshots: list[tuple[str, nx.Graph]] = []
+    snapshots: list[tuple[str, MockWindowManager]] = []
     for ws in window_sizes:
         # Slide the window to the middle of the stream (or end if too large)
         start = max(0, (total - ws) // 2)
         G = nx.DiGraph() if directed else nx.Graph()
+        wm = MockWindowManager(G, None)
         for src, dst in edges[start : start + ws]:
-            G.add_edge(src, dst)
+             # Assuming timestamp is not available
+            wm.addEdge(src, dst, t=0)
         label = f"{fname}_win{ws}_start{start}"
-        snapshots.append((label, G))
+        snapshots.append((label, wm))
         print(f"  Snapshot {label}: n={G.number_of_nodes()}, m={G.number_of_edges()}")
 
     return snapshots
@@ -171,8 +178,22 @@ def time_algorithm(algo_fn, G: nx.Graph, repeats: int = 3) -> float:
     return float(np.median(times))
 
 
+def clone_window_manager(wm: MockWindowManager) -> MockWindowManager:
+    """Create a safe copy of a MockWindowManager without using deepcopy."""
+    graph_copy = wm.graph.copy()
+    cloned = MockWindowManager(graph_copy, wm.algo, wm.base_time)
+
+    curr = wm.timed_list.head
+    while curr is not None:
+        cloned.timed_list.append(curr.src, curr.dst, curr.t)
+        cloned.edge_count[(curr.src, curr.dst)] += 1
+        curr = curr.next
+
+    return cloned
+
+
 def collect_timings(
-    graphs: list[tuple[str, nx.Graph]],
+    graphs: list[tuple[str, MockWindowManager]],
     algo_names: list[str] | None = None,
     repeats: int = 3,
 ) -> list[dict]:
@@ -184,24 +205,51 @@ def collect_timings(
         algo_names = list_algorithms()
 
     rows = []
-    total = len(graphs) * len(algo_names)
+    num_s_samples = 10
+    total = len(graphs) * num_s_samples * len(algo_names)
+    low, high = 0.1, 10
     done = 0
-    for label, G in graphs:
-        features = extract_features(G)
-        for algo_name in algo_names:
-            done += 1
-            algo_fn = get_algorithm(algo_name)
-            print(f"  [{done}/{total}] {algo_name} on {label} "
-                  f"(n={G.number_of_nodes()}, m={G.number_of_edges()}) ...",
-                  end=" ", flush=True)
-            try:
-                rt = time_algorithm(algo_fn, G, repeats=repeats)
-                print(f"{rt:.4f}s")
-            except Exception as e:
-                print(f"FAILED ({e})")
-                rt = float("nan")
-            row = {**features, "graph_label": label, "algorithm": algo_name, "runtime": rt}
-            rows.append(row)
+    for label, wm in graphs:
+        pre_features = extract_features(wm.graph)
+        for s_value in np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=num_s_samples))):
+            tmp_wm = clone_window_manager(wm)
+            begin_shed = time.perf_counter()
+            tmp_wm.modifiedSpectralSparsity(s_value)
+            end_shed = time.perf_counter()
+            post_features = extract_features(tmp_wm.graph)
+            for algo_name in algo_names:
+                done += 1
+                algo_fn = get_algorithm(algo_name)
+                print(f"  [{done}/{total}] {algo_name} on {label} with s={s_value:.2f} "
+                    f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
+                    end=" ", flush=True)
+                try:
+                    rt = time_algorithm(algo_fn, tmp_wm.graph, repeats=repeats)
+                    print(f"{rt:.4f}s")
+                except Exception as e:
+                    print(f"FAILED ({e})")
+                    rt = float("nan")
+                row = {
+                    **{f"pre_{k}": v for k, v in pre_features.items()},
+                    **{f"post_{k}": v for k, v in post_features.items()},
+                    **post_features,
+                    "graph_label": label,
+                    "s_value": s_value,
+                    "algorithm": algo_name,
+                    "runtime": rt,
+                    "shed_time": end_shed - begin_shed,
+                }
+                rows.append(row)
+
+            if (
+                pre_features["num_nodes"] == post_features["num_nodes"]
+                and pre_features["num_edges"] == post_features["num_edges"]
+            ):
+                print(
+                    f"  -> No topology change after sparsification for {label} at s={s_value:.2f}; "
+                    "skipping remaining s-values for this graph."
+                )
+                break
     return rows
 
 
@@ -274,7 +322,7 @@ def cmd_collect(args):
 
 
 def cmd_train(args):
-    """Train an ML model from a collected CSV."""
+    """Train an ML model to predict sparsification strength s_value."""
     rows = load_timings_csv(args.csv)
 
     # Filter to the requested algorithm
@@ -285,17 +333,20 @@ def cmd_train(args):
         sys.exit(1)
 
     algo_name = rows[0]["algorithm"]
-    X = np.array([features_to_vector(r) for r in rows])
-    y = np.array([r["runtime"] for r in rows])
+    X = np.array([
+        [float(r[f"pre_{name}"]) for name in FEATURE_NAMES] + [float(r["runtime"]) + float(r["shed_time"])]
+        for r in rows
+    ])
+    y = np.array([float(r["s_value"]) for r in rows])
 
-    print(f"Training on {len(y)} samples for '{algo_name}' ...")
+    print(f"Training on {len(y)} samples for '{algo_name}' to predict s_value ...")
     predictor = RuntimePredictor()
-    metrics = predictor.fit(X, y, algorithm_name=algo_name)
+    metrics = predictor.fit(X, y, algorithm_name=algo_name, feature_names=S_PREDICT_FEATURE_NAMES)
 
-    print(f"  MAE:        {metrics['mae']:.6f}s")
+    print(f"  MAE (s):    {metrics['mae']:.6f}")
     print(f"  R²:         {metrics['r2']:.4f}")
     if "cv_mean_mae" in metrics:
-        print(f"  CV MAE:     {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
+        print(f"  CV MAE (s): {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
 
     importances = predictor.feature_importances()
     print("\n  Feature importances:")
@@ -307,21 +358,27 @@ def cmd_train(args):
 
 
 def cmd_predict(args):
-    """Load a trained model and predict runtime for a graph."""
+    """Load a trained model and predict sparsification strength s_value for a graph."""
     predictor = RuntimePredictor.load(args.model_dir)
     G = load_graph_from_edgelist(args.graph, directed=True)
-    features = extract_features(G)
+    pre_features = extract_features(G)
+    total_time = args.runtime + args.shed_time
+    features = {
+        **{f"pre_{k}": v for k, v in pre_features.items()},
+        "total_time": total_time,
+    }
 
     start = time.perf_counter()
     predicted = predictor.predict(features)
     pred_time = time.perf_counter() - start
 
     print(f"Graph:       {args.graph}")
-    print(f"  Nodes:     {features['num_nodes']}")
-    print(f"  Edges:     {features['num_edges']}")
-    print(f"  Density:   {features['density']:.6f}")
-    print(f"  Avg degree:{features['avg_degree']:.2f}")
-    print(f"\nPredicted runtime for '{predictor.algorithm_name}': {predicted:.6f}s")
+    print(f"  Nodes:     {pre_features['num_nodes']}")
+    print(f"  Edges:     {pre_features['num_edges']}")
+    print(f"  Density:   {pre_features['density']:.6f}")
+    print(f"  Avg degree:{pre_features['avg_degree']:.2f}")
+    print(f"  Total time (runtime+shed_time): {total_time:.6f}s")
+    print(f"\nPredicted s_value for '{predictor.algorithm_name}': {predicted:.6f}")
     print(f"(prediction itself took {pred_time*1e6:.0f}µs)")
 
 
@@ -377,11 +434,15 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Directory to save the trained model")
 
     # -- predict -------------------------------------------------------
-    p_predict = sub.add_parser("predict", help="Predict runtime for a graph")
+    p_predict = sub.add_parser("predict", help="Predict s_value for a graph")
     p_predict.add_argument("--model-dir", type=str, required=True,
                            help="Directory with saved model")
     p_predict.add_argument("--graph", type=str, required=True,
                            help="Path to graph edge-list file")
+    p_predict.add_argument("--runtime", type=float, required=True,
+                           help="Observed algorithm runtime in seconds")
+    p_predict.add_argument("--shed-time", type=float, required=True,
+                           help="Observed shedding time in seconds")
 
     # -- run-all -------------------------------------------------------
     p_all = sub.add_parser("run-all", help="Collect + Train end-to-end")
@@ -403,6 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    np.random.seed(42)
 
     cmd_map = {
         "collect": cmd_collect,

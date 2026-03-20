@@ -4,10 +4,9 @@ import random
 import time
 import networkx as nx
 import asyncio
-# from sparsifiers import 
-from buckets import Buckets
-from timed_linkedlist import TimedLL, TimedLLNode
-from load_shed_manager import LoadShedManager
+from core.buckets import Buckets
+from core.timed_linkedlist import TimedLL, TimedLLNode
+from core.load_shed_manager import LoadShedManager
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, base_time=0, predictor=None):
@@ -113,9 +112,6 @@ class WindowManager:
             self.removeEdge(s, d)
             print(f"Edge removed: {s} -> {d}, time: {edge_t}")
 
-    # def getAverageDegree(self):
-    #     return 2 * len(self.edge_count) / self.graph.number_of_nodes() if self.graph.number_of_nodes() > 0 else 0
-
     def runAlgo(self, snapshot):
         start_time = time.perf_counter()
         result = self.algo(snapshot)
@@ -153,3 +149,32 @@ class WindowManager:
     
     # def getEdgeCount(self):
     #     return sum(self.edge_count.values())
+
+# ======================================================================
+# Sparsifiers
+# ======================================================================
+
+    def modifiedSpectralSparsity(self, end_time, s: float):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
+        """
+        For each edge in the current window, compute the probability p of keeping it based on the formula:
+        P(keep) = davg * s / x
+        where x = min(degAout, degBin)
+        
+        Intuition: keep all edges with degree < davg * s, hyperbolic decay proportional to 1/x"""
+        davg = self.getAverageDegree(self.graph)
+        curr = self.timed_list.head
+        while curr and curr.t < end_time:
+            denom = min(self.graph.out_degree(curr.src), self.graph.in_degree(curr.dst))
+            p = davg * s / denom if denom > 0 else 0
+
+            temp = curr.next
+            if p >= 1 or random.random() >= p:
+                self.timed_list.remove_node(curr) # remove edge from timed_list
+                self.remove_edge(curr.src, curr.dst) ## TODO: this is not consistent with edge_count + graph - need to decrement edge_count and only remove from graph if count hits 0
+            curr = temp
+
+    def getAverageDegree(self, graph: nx.Graph) -> float:
+            return 2 * graph.number_of_edges() / graph.number_of_nodes() if graph.number_of_nodes() > 0 else 0
+
+    def randomSparsity(self, s): # TODO
+        pass
