@@ -21,11 +21,11 @@ class Buckets:
             if self.buckets[idx][0] <= time and time < self.buckets[idx][0] + self.slide:
                 print(f"Bucket found for time {time}: {self.buckets[idx][0]} to {self.buckets[idx][0] + self.slide}, count: {self.buckets[idx][1]}")
                 return self.buckets[idx][1]
-        return None
+        return 0
 
     def removeBefore(self, time):
         while self.buckets and self.buckets[0][0] + self.slide <= time:
             self.buckets.popleft()
     
-    def shed(self, time):
+    # def shed(self, time):
         
