@@ -17,7 +17,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.metrics import mean_absolute_error, r2_score
 
 try:
-    from modelling.feature_extraction import FEATURE_NAMES
+    from modelling_s.feature_extraction import FEATURE_NAMES
 except ModuleNotFoundError:
     from feature_extraction import FEATURE_NAMES
 
@@ -99,7 +99,13 @@ class RuntimePredictor:
         """
         if not self._is_fitted:
             raise RuntimeError("Model has not been trained yet.  Call fit() first.")
-        vec = np.array([features[k] for k in self.feature_names]).reshape(1, -1)
+        missing = [name for name in self.feature_names if name not in features]
+        if missing:
+            raise ValueError(
+                f"Missing feature(s) for prediction: {missing}. "
+                f"Model expects: {self.feature_names}"
+            )
+        vec = np.array([features[name] for name in self.feature_names]).reshape(1, -1)
         return float(self.model.predict(vec)[0])
 
     def predict_batch(self, X: np.ndarray) -> np.ndarray:

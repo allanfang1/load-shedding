@@ -1,10 +1,11 @@
 {
   "algorithm_name": "betweenness_centrality",
   "feature_names": [
-    "num_nodes",
-    "num_edges",
-    "density",
-    "avg_degree",
-    "is_directed"
+    "pre_num_nodes",
+    "pre_num_edges",
+    "pre_density",
+    "pre_avg_degree",
+    "pre_is_directed",
+    "budget"
   ]
 }
