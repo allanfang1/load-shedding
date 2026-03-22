@@ -44,7 +44,6 @@ try:
     from modelling_s.feature_extraction import (
         FEATURE_NAMES,
         extract_features,
-        features_to_vector,
     )
     from modelling_s.runtime_predictor import RuntimePredictor
 except ModuleNotFoundError:
@@ -53,12 +52,8 @@ except ModuleNotFoundError:
     from feature_extraction import (
         FEATURE_NAMES,
         extract_features,
-        features_to_vector,
     )
     from runtime_predictor import RuntimePredictor
-
-
-S_PREDICT_FEATURE_NAMES = [f"pre_{name}" for name in FEATURE_NAMES] + ["total_time"]
 
 
 # ======================================================================
@@ -232,12 +227,12 @@ def collect_timings(
                 row = {
                     **{f"pre_{k}": v for k, v in pre_features.items()},
                     **{f"post_{k}": v for k, v in post_features.items()},
-                    **post_features,
                     "graph_label": label,
                     "s_value": s_value,
                     "algorithm": algo_name,
                     "runtime": rt,
                     "shed_time": end_shed - begin_shed,
+                    "budget": rt + (end_shed - begin_shed),
                 }
                 rows.append(row)
 
@@ -249,6 +244,7 @@ def collect_timings(
                     f"  -> No topology change after sparsification for {label} at s={s_value:.2f}; "
                     "skipping remaining s-values for this graph."
                 )
+                done += (done // num_s_samples * len(algo_names)) + (num_s_samples * len(algo_names))
                 break
     return rows
 
@@ -274,10 +270,40 @@ def load_timings_csv(path: str) -> list[dict]:
         rows = list(reader)
     # Convert numeric fields back from strings
     for row in rows:
-        for key in FEATURE_NAMES + ["runtime"]:
+        for key in FEATURE_NAMES: # TODO automate loading target
             if key in row:
                 row[key] = float(row[key])
     return rows
+
+
+def parse_feature_list(raw: str | None, available: list[str]) -> list[str]:
+    """Parse a comma-separated feature list.
+
+    Accepted values
+    ---------------
+    - "a,b,c" -> explicit ordered subset
+    """
+    if raw is None:
+        raise ValueError(
+            "No features provided. Pass --features as a comma-separated list."
+        )
+
+    selected = [x.strip() for x in raw.split(",") if x.strip()]
+    if not selected:
+        raise ValueError("No features selected.")
+
+    unknown = [x for x in selected if x not in available]
+    if unknown:
+        raise ValueError(
+            f"Unknown feature(s): {unknown}. "
+            f"Available features: {available}"
+        )
+
+    duplicates = [x for x in set(selected) if selected.count(x) > 1]
+    if duplicates:
+        raise ValueError(f"Duplicate feature(s): {sorted(duplicates)}")
+
+    return selected
 
 
 # ======================================================================
@@ -322,7 +348,7 @@ def cmd_collect(args):
 
 
 def cmd_train(args):
-    """Train an ML model to predict sparsification strength s_value."""
+    """Train an ML model from a collected CSV."""
     rows = load_timings_csv(args.csv)
 
     # Filter to the requested algorithm
@@ -332,21 +358,51 @@ def cmd_train(args):
         print(f"No data for algorithm '{args.algo}' in {args.csv}")
         sys.exit(1)
 
+    target_name = "s_value"
+    excluded_columns = {"graph_label", "algorithm", target_name}
+    available_numeric_features = [
+        key for key in rows[0].keys() if key not in excluded_columns
+    ]
+
+    try:
+        if args.features:
+            selected_features = parse_feature_list(args.features, available_numeric_features)
+        else:
+            selected_features = available_numeric_features
+    except ValueError as e:
+        print(f"Invalid --features: {e}")
+        print(f"Selectable feature columns: {available_numeric_features}")
+        sys.exit(1)
+
     algo_name = rows[0]["algorithm"]
-    X = np.array([
-        [float(r[f"pre_{name}"]) for name in FEATURE_NAMES] + [float(r["runtime"]) + float(r["shed_time"])]
-        for r in rows
-    ])
-    y = np.array([float(r["s_value"]) for r in rows])
+    try:
+        X = np.array([
+            [float(r[name]) for name in selected_features]
+            for r in rows
+        ])
+    except KeyError as e:
+        print(
+            f"Feature {e} not present in CSV rows. "
+            f"Selected features: {selected_features}"
+        )
+        sys.exit(1)
 
-    print(f"Training on {len(y)} samples for '{algo_name}' to predict s_value ...")
+    y = np.array([float(r[target_name]) for r in rows])
+
+    print(f"Training on {len(y)} samples for '{algo_name}' ...")
+    print(f"Using features (in order): {selected_features}")
     predictor = RuntimePredictor()
-    metrics = predictor.fit(X, y, algorithm_name=algo_name, feature_names=S_PREDICT_FEATURE_NAMES)
+    metrics = predictor.fit(
+        X,
+        y,
+        algorithm_name=algo_name,
+        feature_names=selected_features,
+    )
 
-    print(f"  MAE (s):    {metrics['mae']:.6f}")
+    print(f"  MAE:        {metrics['mae']:.6f}s")
     print(f"  R²:         {metrics['r2']:.4f}")
     if "cv_mean_mae" in metrics:
-        print(f"  CV MAE (s): {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
+        print(f"  CV MAE:     {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
 
     importances = predictor.feature_importances()
     print("\n  Feature importances:")
@@ -358,27 +414,36 @@ def cmd_train(args):
 
 
 def cmd_predict(args):
-    """Load a trained model and predict sparsification strength s_value for a graph."""
+    """Load a trained model and predict runtime for a graph."""
     predictor = RuntimePredictor.load(args.model_dir)
     G = load_graph_from_edgelist(args.graph, directed=True)
-    pre_features = extract_features(G)
-    total_time = args.runtime + args.shed_time
-    features = {
-        **{f"pre_{k}": v for k, v in pre_features.items()},
-        "total_time": total_time,
-    }
+    features = extract_features(G)
+
+    if args.features:
+        try:
+            requested = parse_feature_list(args.features, FEATURE_NAMES)
+        except ValueError as e:
+            print(f"Invalid --features: {e}")
+            sys.exit(1)
+
+        if requested != predictor.feature_names:
+            print("Requested --features do not match model feature schema.")
+            print(f"  Requested: {requested}")
+            print(f"  Model:     {predictor.feature_names}")
+            print("Retrain the model with the desired feature list if you want to change schema.")
+            sys.exit(1)
 
     start = time.perf_counter()
     predicted = predictor.predict(features)
     pred_time = time.perf_counter() - start
 
     print(f"Graph:       {args.graph}")
-    print(f"  Nodes:     {pre_features['num_nodes']}")
-    print(f"  Edges:     {pre_features['num_edges']}")
-    print(f"  Density:   {pre_features['density']:.6f}")
-    print(f"  Avg degree:{pre_features['avg_degree']:.2f}")
-    print(f"  Total time (runtime+shed_time): {total_time:.6f}s")
-    print(f"\nPredicted s_value for '{predictor.algorithm_name}': {predicted:.6f}")
+    print(f"  Nodes:     {features['num_nodes']}")
+    print(f"  Edges:     {features['num_edges']}")
+    print(f"  Density:   {features['density']:.6f}")
+    print(f"  Avg degree:{features['avg_degree']:.2f}")
+    print(f"  Features:  {predictor.feature_names}")
+    print(f"\nPredicted runtime for '{predictor.algorithm_name}': {predicted:.6f}s")
     print(f"(prediction itself took {pred_time*1e6:.0f}µs)")
 
 
@@ -430,19 +495,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--csv", type=str, required=True, help="Timing CSV file")
     p_train.add_argument("--algo", type=str, required=True,
                          help="Algorithm name to train a model for")
+    p_train.add_argument("--features", type=str, default=None,
+                         help="Comma-separated feature list to train on (default: all numeric non-target columns)")
     p_train.add_argument("--model-dir", type=str, default="models",
                          help="Directory to save the trained model")
 
     # -- predict -------------------------------------------------------
-    p_predict = sub.add_parser("predict", help="Predict s_value for a graph")
+    p_predict = sub.add_parser("predict", help="Predict runtime for a graph")
     p_predict.add_argument("--model-dir", type=str, required=True,
                            help="Directory with saved model")
     p_predict.add_argument("--graph", type=str, required=True,
                            help="Path to graph edge-list file")
-    p_predict.add_argument("--runtime", type=float, required=True,
-                           help="Observed algorithm runtime in seconds")
-    p_predict.add_argument("--shed-time", type=float, required=True,
-                           help="Observed shedding time in seconds")
+    p_predict.add_argument("--features", type=str, default=None,
+                           help="Optional schema check. Must exactly match model feature list")
 
     # -- run-all -------------------------------------------------------
     p_all = sub.add_parser("run-all", help="Collect + Train end-to-end")
@@ -455,6 +520,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Cap snapshot size in edges")
     p_all.add_argument("--algo", type=str, required=True)
     p_all.add_argument("--repeats", type=int, default=1)
+    p_all.add_argument("--features", type=str, default=None,
+                       help="Comma-separated feature list to pass to train")
     p_all.add_argument("--model-dir", type=str, default="models")
     p_all.add_argument("--out", type=str, default=None)
 
