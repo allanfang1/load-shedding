@@ -27,7 +27,7 @@ class RuntimePredictor:
 
     def __init__(
         self,
-        n_estimators: int = 50,
+        n_estimators: int = 80,
         random_state: int = 42,
     ):
         self.model = RandomForestRegressor(
