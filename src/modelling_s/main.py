@@ -200,7 +200,7 @@ def collect_timings(
         algo_names = list_algorithms()
 
     rows = []
-    num_s_samples = 10
+    num_s_samples = 16
     total = len(graphs) * num_s_samples * len(algo_names)
     low, high = 0.1, 10
     done = 0
@@ -395,10 +395,12 @@ def cmd_train(args):
     print(f"Training on {len(y)} samples for '{algo_name}' ...")
     print(f"Using features (in order): {selected_features}")
     predictor = RuntimePredictor()
+
     metrics = predictor.fit(
         X,
         y,
         algorithm_name=algo_name,
+        cv_folds=args.cv_folds,
         feature_names=selected_features,
     )
 
@@ -406,6 +408,13 @@ def cmd_train(args):
     print(f"  R²:         {metrics['r2']:.4f}")
     if "cv_mean_mae" in metrics:
         print(f"  CV MAE:     {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
+        train_cv_gap = metrics["cv_mean_mae"] - metrics["mae"]
+        ratio = metrics["cv_mean_mae"] / max(metrics["mae"], 1e-12)
+        print(f"  CV-Train gap: {train_cv_gap:+.6f}s  (ratio={ratio:.2f}x)")
+        if ratio > 1.20:
+            print("  Note: gap suggests possible overfitting; consider shallower trees or larger min_samples_*")
+    elif args.cv_folds > 0:
+        print(f"  CV skipped: need at least {args.cv_folds} samples, got {len(y)}")
 
     importances = predictor.feature_importances()
     print("\n  Feature importances:")
@@ -502,6 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Comma-separated feature list to train on (default: all numeric non-target columns)")
     p_train.add_argument("--model-dir", type=str, default="models",
                          help="Directory to save the trained model")
+    p_train.add_argument("--cv-folds", type=int, default=5,
+                         help="Cross-validation folds (0 to disable, default: 5)")
 
     # -- predict -------------------------------------------------------
     p_predict = sub.add_parser("predict", help="Predict runtime for a graph")
@@ -525,6 +536,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_all.add_argument("--repeats", type=int, default=1)
     p_all.add_argument("--features", type=str, default=None,
                        help="Comma-separated feature list to pass to train")
+    p_all.add_argument("--cv-folds", type=int, default=5,
+                       help="Cross-validation folds used in train (default: 5)")
     p_all.add_argument("--model-dir", type=str, default="models")
     p_all.add_argument("--out", type=str, default=None)
 
