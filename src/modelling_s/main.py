@@ -204,6 +204,7 @@ def collect_timings(
     total = len(graphs) * num_s_samples * len(algo_names)
     low, high = 0.1, 10
     done = 0
+    progress = 0
     for label, wm in graphs:
         pre_features = extract_features(wm.graph)
         for s_value in np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=num_s_samples))):
@@ -214,8 +215,9 @@ def collect_timings(
             post_features = extract_features(tmp_wm.graph)
             for algo_name in algo_names:
                 done += 1
+                progress += 1
                 algo_fn = get_algorithm(algo_name)
-                print(f"  [{done}/{total}] {algo_name} on {label} with s={s_value:.2f} "
+                print(f"  [{progress}/{total} ({done})] {algo_name} on {label} with s={s_value:.2f} "
                     f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
                     end=" ", flush=True)
                 try:
@@ -244,7 +246,8 @@ def collect_timings(
                     f"  -> No topology change after sparsification for {label} at s={s_value:.2f}; "
                     "skipping remaining s-values for this graph."
                 )
-                done += (done // num_s_samples * len(algo_names)) + (num_s_samples * len(algo_names))
+                if progress % (num_s_samples * len(algo_names)) != 0:
+                    progress = ((progress // (num_s_samples * len(algo_names))) + 1) * (num_s_samples * len(algo_names))
                 break
     return rows
 
