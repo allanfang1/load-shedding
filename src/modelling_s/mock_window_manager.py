@@ -1,7 +1,7 @@
 from collections import defaultdict
-import random
 import networkx as nx
 from core.timed_linkedlist import TimedLL
+from core.sparsifiers import modified_spectral_sparsify
 
 class MockWindowManager:
     """
@@ -31,27 +31,14 @@ class MockWindowManager:
             s, d, _ = self.timed_list.popleft()
             self._decrementEdge(s, d)
 
-    # def removeOldestMatchingEdge(self, s, d):
-    #     """
-    #     Remove one occurrence of (s, d), specifically the oldest one in TimedLL.
-    #     Keeps TimedLL + edge_count + graph consistent.
-    #     Returns True if removed, False if not found.
-    #     """
-    #     curr = self.timed_list.head
-    #     while curr:
-    #         if curr.src == s and curr.dst == d:
-    #             self.timed_list.remove_node(curr)
-    #             self._decrementEdge(s, d)
-    #             return True
-    #         curr = curr.next
-    #     return False
-
     def runAlgo(self, snapshot=None):
         if self.algo is None:
             return None
         return self.algo(self.graph if snapshot is None else snapshot)
 
     def _decrementEdge(self, s, d):
+        """Decrement multiplicity of edge (s, d) and remove from graph if count reaches 0.
+        Returns True if edge was removed from graph, False otherwise."""
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
             if self.graph.has_edge(s, d):
@@ -61,6 +48,8 @@ class MockWindowManager:
             if d in self.graph and self.graph.degree(d) == 0:
                 self.graph.remove_node(d)
             del self.edge_count[(s, d)]
+            return True
+        return False
 
 # ======================================================================
 # Sparsifiers
@@ -73,20 +62,13 @@ class MockWindowManager:
         where x = min(degAout, degBin)
         
         Intuition: keep all edges with degree < davg * s, hyperbolic decay proportional to 1/x"""
-        davg = self.getAverageDegree(self.graph)
-        curr = self.timed_list.head
-        while curr:
-            denom = min(self.graph.out_degree(curr.src), self.graph.in_degree(curr.dst))
-            p = davg * s / denom if denom > 0 else 0
-
-            temp = curr.next
-            if p < 1 and random.random() >= p:
-                self.timed_list.remove_node(curr) # remove edge from timed_list
-                self._decrementEdge(curr.src, curr.dst)
-            curr = temp
-
-    def getAverageDegree(self, graph: nx.Graph) -> float:
-            return 2 * graph.number_of_edges() / graph.number_of_nodes() if graph.number_of_nodes() > 0 else 0
+        modified_spectral_sparsify(
+            timed_list=self.timed_list,
+            graph=self.graph,
+            remove_edge_fn=self._decrementEdge,
+            s=s,
+            end_time=None,
+        )
     
     def randomSparsity(self, s): # TODO
         pass

@@ -6,10 +6,10 @@ from core.window_manager import WindowManager
 import asyncio
 from producer_sim import produce, Edge
 
-from modelling.runtime_predictor import RuntimePredictor
+from modelling_s.runtime_predictor import RuntimePredictor
 
 DATA = "../data/test_graph.txt" # "../data/higgs-activity_time_postprocess.txt"
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "modelling", "models") # Directory where trained models are saved/loaded
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "models") # Directory where trained models are saved/loaded
 
 async def window_trigger(wm: WindowManager, slide: float, base: float):
     """Periodically fires the window function every `slide` real seconds."""
