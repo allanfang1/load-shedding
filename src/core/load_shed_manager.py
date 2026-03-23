@@ -1,97 +1,58 @@
-"""
-Load shedder: derives how many edges to shed so that the predicted
-algorithm runtime fits within the remaining wall-clock budget.
+"""Prediction interface around ``RuntimePredictor``.
 
-The module is *policy-agnostic* — it computes a target edge count
-(and therefore the number of edges to drop) but does NOT decide
-*which* edges to remove.  A sparsifier / shedding policy should be
-plugged in separately.
-
-Cost: O(log m) RF predictions.  No graph traversal — only O(1)
-      calls to number_of_nodes() / number_of_edges().
+This module 1) builds input features, 2) calls the model, and 
+3) optionally maps the raw prediction to a caller-defined output shape.
 """
 
 from __future__ import annotations
 
 import networkx as nx
+from typing import Any, Callable
 
-from modelling.feature_extraction import features_from_nm
-from modelling.runtime_predictor import RuntimePredictor
+from modelling_s.runtime_predictor import RuntimePredictor
 
 
 class LoadShedManager:
-    """Derive the number of edges to shed given a time budget.
+    """Thin, configurable interface for runtime prediction.
 
     Parameters
     ----------
     predictor : RuntimePredictor
-        A trained ML model that predicts algorithm runtime from graph features.
-    safety_margin : float
-        Fraction of *remaining_time* to reserve as a safety buffer (0-1).
-        E.g. 0.1 means the algorithm must fit in 90 % of the remaining time.
+        Trained model used for inference.
+    feature_builder : Callable
+        Function that builds the feature dict passed to ``predictor.predict``.
+        Signature: ``(graph, remaining_time) -> dict[str, float]``.
+    output_adapter : Callable | None
+        Function that maps raw model output to any shape needed by callers.
+        Signature: ``(prediction, features, graph, remaining_time) -> Any``.
+        If ``None``, raw ``float`` prediction is returned.
     """
 
-    def __init__(self, predictor: RuntimePredictor, safety_margin: float = 0.1):
+    def __init__(
+        self,
+        predictor: RuntimePredictor,
+        feature_builder: Callable[[nx.Graph, float], dict[str, float]],
+        output_adapter: Callable[[float, dict[str, float], nx.Graph, float], Any] | None = None,
+    ):
         self.predictor = predictor
-        self.safety_margin = safety_margin
+        self.feature_builder = feature_builder
+        self.output_adapter = output_adapter
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def edges_to_shed(
+    def predict(
         self,
         graph: nx.Graph,
         remaining_time: float,
-    ) -> int:
-        """Return the number of edges that must be shed.
+    ) -> Any:
+        """Build features, run model inference, and adapt output if requested."""
+        features = self.feature_builder(graph, remaining_time)
+        model_features = list(getattr(self.predictor, "feature_names", []))
+        if model_features and list(features.keys()) != model_features:
+            raise ValueError(
+                "feature_builder output keys do not match model feature schema from meta.json. "
+                f"Model: {model_features}, Built: {list(features.keys())}"
+            )
+        prediction = self.predictor.predict(features)
 
-        All graph queries are O(1).  The cost is O(log m) RF predictions,
-        each of which is a scaler transform + tree traversal (microseconds).
-
-        Parameters
-        ----------
-        graph : nx.Graph | nx.DiGraph
-            Current snapshot of the windowed graph.
-        remaining_time : float
-            Wall-clock seconds left before the window deadline.
-
-        Returns
-        -------
-        int
-            Number of edges to shed.  0 means no shedding is needed.
-        """
-        n = graph.number_of_nodes()          # O(1)
-        current_m = graph.number_of_edges()  # O(1)
-        is_directed = int(graph.is_directed())
-
-        if current_m == 0:
-            return 0
-
-        budget = remaining_time * (1.0 - self.safety_margin)
-        if budget <= 0:
-            return current_m
-
-        # Fast path: predict with current n, m
-        base_features = features_from_nm(n, current_m, is_directed)
-        predicted = self.predictor.predict(base_features)
-        if predicted <= budget:
-            return 0  # graph already fits in budget
-
-        # Binary search for the maximum edge count that fits in budget.
-        # lo = 0 edges (trivially fits), hi = current edge count (does not fit)
-        lo, hi = 0, current_m
-        target_m = 0  # safe default: drop everything
-
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            est_features = features_from_nm(n, mid, is_directed)
-            pred = self.predictor.predict(est_features)
-            if pred <= budget:
-                target_m = mid   # mid edges fit — try keeping more
-                lo = mid + 1
-            else:
-                hi = mid - 1     # too slow — need fewer edges
-
-        edges_to_drop = current_m - target_m
-        return max(0, edges_to_drop)
+        if self.output_adapter is None:
+            return prediction
+        return self.output_adapter(prediction, features, graph, remaining_time)
