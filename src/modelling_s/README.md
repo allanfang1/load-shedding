@@ -172,7 +172,7 @@ Encapsulates model lifecycle in class `RuntimePredictor`.
 
 Implements three subcommands:
 
-### `collect`
+### `collect` (6.2)
 
 Builds graph list, extracts features, applies sparsification sweeps, times algorithm(s), writes CSV.
 
@@ -195,7 +195,7 @@ Collection behavior details:
 - Stores both pre/post features and derived `budget`.
 - Stops further `s` sweeps early for a graph when sparsification no longer changes topology.
 
-### `train`
+### `train` (6.3)
 
 - Loads CSV rows.
 - Filters rows to `--algo`.
@@ -206,7 +206,7 @@ Collection behavior details:
 - Prints feature importances.
 - Saves artifacts into `--model-dir`.
 
-### `run-all`
+### `run-all` (6.4)
 
 Pipeline shortcut: `collect` then `train`.
 
@@ -235,7 +235,7 @@ If NaNs appear in the selected training set, training may fail depending on esti
 
 ## 6) Practical Usage Guide
 
-Assuming working directory is `src/modelling_s`.
+See 4.4 for more details. Assuming working directory is `src/modelling_s`. 
 
 ### 6.1 Install dependencies
 
