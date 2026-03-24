@@ -2,7 +2,7 @@ import time
 import os
 
 import networkx as nx
-from core.window_manager import WindowManager
+from window_manager import WindowManager
 import asyncio
 from producer_sim import produce, Edge
 
