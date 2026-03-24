@@ -3,8 +3,8 @@ import math
 import random
 import time
 import networkx as nx
+from load_shed_manager import LoadShedManager
 from core.timed_linkedlist import TimedLL
-from core.load_shed_manager import LoadShedManager
 from core.sparsifiers import modified_spectral_sparsify
 
 class WindowManager:
@@ -55,20 +55,12 @@ class WindowManager:
         n = graph.number_of_nodes()
         m = graph.number_of_edges()
         is_directed = int(graph.is_directed())
-
-        if n == 0:
-            density = 0.0
-            avg_degree = 0.0
-        else:
-            denom = n * (n - 1) if is_directed else (n * (n - 1) / 2)
-            density = m / denom if denom else 0.0
-            avg_degree = (m / n) if is_directed else (2 * m / n)
-
+        
         return {
             "pre_num_nodes": float(n),
             "pre_num_edges": float(m),
-            "pre_density": float(density),
-            "pre_avg_degree": float(avg_degree),
+            "pre_log_num_nodes": float(math.log2(n)) if n > 0 else 0.0,
+            "pre_log_num_edges": float(math.log2(m)) if m > 0 else 0.0,
             "pre_is_directed": float(is_directed),
             "budget": max(0.0, float(remaining_time)),
         }
