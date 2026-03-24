@@ -1,19 +1,19 @@
 # Modelling Module — Technical Documentation
 
-This document explains the design, runtime flow, extension points, and operational usage of the `src/modelling` module.
+This document explains the design, runtime flow, extension points, and operational usage of the `src/modelling_s` module.
 
 ---
 
 ## 1) Purpose and Scope
 
-The modelling module predicts the runtime of graph algorithms before they execute in the online load-shedding pipeline.
+The modelling module is used to learn and export a model for sparsification control value (`s_value`) estimation in the online load-shedding pipeline.
 
 It provides:
 
-1. **Data collection**: run graph algorithms over representative graphs and record observed runtimes.
-2. **Features**: extract (constant time) graph-level features.
-3. **Training**: fit a regressor (Random Forest) per algorithm(s).
-4. **Inference**: predict runtime of a target algorithm on a new graph.
+1. **Data collection**: sample representative graph windows, apply sparsification with multiple `s` values, and record timings.
+2. **Features**: extract lightweight (constant time) graph-level features before/after sparsification.
+3. **Training**: fit a regressor (Random Forest) to predict `s_value`.
+4. **Export**: persist trained model artifacts for use by external inference components.
 
 The implementation is intended for low-latency use in streaming environments where prediction overhead must remain negligible compared to algorithm execution.
 
@@ -21,12 +21,13 @@ The implementation is intended for low-latency use in streaming environments whe
 
 ## 2) Module Layout
 
-`src/modelling/`
+`src/modelling_s/`
 
-- `main.py` — CLI orchestration (`collect`, `train`, `predict`, `run-all`).
+- `main.py` — CLI orchestration (`collect`, `train`, `run-all`).
 - `algorithms.py` — algorithm implementations + registry abstraction.
 - `feature_extraction.py` — graph feature extraction and vectorization.
 - `runtime_predictor.py` — train/predict/persist ML runtime model.
+- `mock_window_manager.py` — lightweight window manager used for simulation. Respects input order.
 - `requirements.txt` — Python package dependencies for this module.
 - `models/` — default persisted artifacts (`model.joblib`, `meta.json`).
 
@@ -39,25 +40,25 @@ The implementation is intended for low-latency use in streaming environments whe
 1. **Graph source**:
    - From static edge-list snapshot files (`--graph-dir`), and/or
    - From edge-list file as a stream (`--sample-file`).
-2. **Feature extraction**: compute feature vector from each graph.
-3. **Timing**: run selected algorithm(s), measure median wall-clock runtime.
+2. **Feature extraction**: compute graph feature vectors.
+3. **Sparsify + timing**: for each sampled graph, sweep `s_value`, sparsify (timed), run selected algorithm(s) (timed).
 4. **Write**: write data rows to CSV.
-5. **Model fit**: train regressor on feature matrix `X` and runtime target `y`.
+5. **Model fit**: train regressor on feature matrix `X` and target `y` (`s_value`).
 6. **Serialization**: persist model/metadata.
-7. **Prediction path**: load artifacts, extract features from new graph, infer runtime.
+7. **External inference path**: downstream components load artifacts and infer targets outside this module CLI.
 
 ### 3.2 Data contracts
 
 **Collected row schema** (`timings.csv`):
 
-- `num_nodes` (float)
-- `num_edges` (float)
-- `density` (float)
-- `avg_degree` (float)
-- `is_directed` (float/int)
+- `pre_num_nodes`, `pre_num_edges`, `pre_log_num_nodes`, `pre_log_num_edges`, `pre_is_directed`
+- `post_num_nodes`, `post_num_edges`, `post_log_num_nodes`, `post_log_num_edges`, `post_is_directed`
 - `graph_label` (string)
+- `s_value` (float)
 - `algorithm` (string)
 - `runtime` (float, seconds; can be `NaN` on failures)
+- `shed_time` (float, seconds)
+- `budget` (float, currently `runtime + shed_time`)
 
 **Persisted model artifacts** (`model-dir`):
 
@@ -115,8 +116,8 @@ Features:
 
 - `num_nodes`
 - `num_edges`
-- `density`
-- `avg_degree`
+- `log_num_nodes`
+- `log_num_edges`
 - `is_directed`
 
 ### Complexity model
@@ -138,22 +139,22 @@ Encapsulates model lifecycle in class `RuntimePredictor`.
 
 ### Model choices
 
-- Regressor: `RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)`
+- Regressor: `RandomForestRegressor(n_estimators=120, min_samples_leaf=2, min_samples_split=4, max_features="sqrt", oob_score=True, random_state=42, n_jobs=-1)`
 
 ### Why this setup
 
 - Random forests capture non-linear and discontinuous patterns better than simple linear models.
 - Inference is fast enough for online gating decisions.
-- Minimal tuning burden and robust behavior on modest tabular datasets.
+- Minimal tuning burden and robust behaviour on modest tabular datasets.
 
 ### Main methods
 
-- `fit(X, y, algorithm_name="unknown", cv_folds=0)`
+- `fit(X, y, algorithm_name="unknown", cv_folds=0, feature_names=None, sample_weight=None)`
   - Fits model.
-  - Computes in-sample `mae` and `r2`.
-  - Optional CV MAE metrics when `cv_folds > 0` and enough samples exist.
+  - Computes in-sample `mae` and `r2` (+ `oob_r2` when available).
+  - Optional CV MAE metrics (GroupKFold or KFold).
 - `predict(features_dict)`
-  - Dict → ordered vector → vector → runtime prediction.
+  - Dict → ordered vector → vector → target prediction.
 - `predict_batch(X)`
   - Batch inference on matrix input.
 - `feature_importances()`
@@ -169,11 +170,11 @@ Encapsulates model lifecycle in class `RuntimePredictor`.
 
 ## 4.4 `main.py` (CLI entry point)
 
-Implements four subcommands:
+Implements three subcommands:
 
 ### `collect`
 
-Builds graph list, extracts features, times algorithm(s), writes CSV.
+Builds graph list, extracts features, applies sparsification sweeps, times algorithm(s), writes CSV.
 
 Input graph modes:
 
@@ -184,28 +185,26 @@ Snapshot sampling (`sample_window_snapshots`) behavior:
 
 - Reads all edges from stream file.
 - Computes geometric progression of window sizes (`numpy.geomspace`) between a minimum and `max_edges` cap.
-- Builds centered sliding windows and creates one graph per window.
+- Builds centered sliding windows and creates one `MockWindowManager` per window.
 
-Timing behavior:
+Collection behavior details:
 
-- `time.perf_counter()` for wall-clock timing.
-- Repeats each `(graph, algorithm)` run and stores median (`numpy.median`).
+- Generates multiple log-uniform `s_value` samples per graph.
+- Applies `modifiedSpectralSparsity(s)` before timing.
+- Times algorithm execution with `time.perf_counter()` and stores median (`numpy.median`) across repeats.
+- Stores both pre/post features and derived `budget`.
+- Stops further `s` sweeps early for a graph when sparsification no longer changes topology.
 
 ### `train`
 
 - Loads CSV rows.
 - Filters rows to `--algo`.
-- Converts feature dicts into `X` matrix.
-- Fits predictor and prints MAE/R² (+ optional CV if enabled in code).
+- Builds `X/y`.
+- Uses `s_value` as the current training target in `cmd_train`.
+- Supports optional KFold cross-validation via `--cv-folds` (set `0` to disable).
+- Fits predictor and prints MAE/R²/OOB (+ optional CV metrics).
 - Prints feature importances.
 - Saves artifacts into `--model-dir`.
-
-### `predict`
-
-- Loads persisted model.
-- Loads target graph.
-- Extracts features.
-- Predicts runtime and prints graph stats + prediction latency.
 
 ### `run-all`
 
@@ -236,7 +235,7 @@ If NaNs appear in the selected training set, training may fail depending on esti
 
 ## 6) Practical Usage Guide
 
-Assuming working directory is `src/modelling`.
+Assuming working directory is `src/modelling_s`.
 
 ### 6.1 Install dependencies
 
@@ -256,17 +255,13 @@ python main.py collect --sample-file ../../data/higgs-activity_time_postprocess.
 python main.py train --csv timings.csv --algo pagerank --model-dir models
 ```
 
-### 6.4 Predict runtime on a new graph
-
-```bash
-python main.py predict --model-dir models --graph ../../data/test_graph.txt
-```
-
-### 6.5 End-to-end in one command
+### 6.4 End-to-end in one command
 
 ```bash
 python main.py run-all --sample-file ../../data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir models
 ```
+
+Note: inference is intentionally external to this CLI. The exported artifacts in `--model-dir` (`model.joblib`, `meta.json`) should be loaded by the runtime component that owns prediction.
 
 ---
 
@@ -315,7 +310,7 @@ Recommended process:
 
 ## 8.2 Performance characteristics
 
-- Data collection is the expensive stage (actual algorithm runs).
+- Data collection is expensive (sparsification sweeps + algorithm runs).
 - Training is moderate cost and parallelized across CPU cores by scikit-learn.
 - Prediction is low-latency (feature extraction + forest traversal).
 
@@ -325,14 +320,15 @@ Recommended process:
 - Unsupported `--algo` value → registry `KeyError`.
 - No matching algorithm rows during `train` → process exits.
 - Missing artifacts in `model-dir` during `predict` → file load failure.
+- Feature schema mismatch between training and prediction inputs → prediction-time validation or missing-feature errors.
 
 ---
 
 ## 9) Quick Reference
 
-- Main CLI: `python main.py <collect|train|predict|run-all> ...`
+- Main CLI: `python main.py <collect|train|run-all> ...`
 - Algorithms available: `list_algorithms()` in `algorithms.py`
 - Feature order contract: `FEATURE_NAMES` in `feature_extraction.py`
 - Model persistence entrypoint: `RuntimePredictor.save/load`
 
-This module is designed to remain simple, inspectable, and easy to extend while enabling runtime-aware decision-making in the larger load-shedding system.
+This module is designed to remain simple, inspectable, and easy to extend while enabling runtime- and sparsification-aware decision-making in the larger load-shedding system.

@@ -13,7 +13,7 @@ import json
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold, cross_val_score
 from sklearn.metrics import mean_absolute_error, r2_score
 
 try:
@@ -27,11 +27,15 @@ class RuntimePredictor:
 
     def __init__(
         self,
-        n_estimators: int = 80,
+        n_estimators: int = 120,
         random_state: int = 42,
     ):
         self.model = RandomForestRegressor(
             n_estimators=n_estimators,
+            min_samples_leaf=2,
+            min_samples_split=4,
+            max_features="sqrt",
+            oob_score=True,
             random_state=random_state,
             n_jobs=-1,          # use all cores for training
         )
@@ -51,6 +55,7 @@ class RuntimePredictor:
         algorithm_name: str = "unknown",
         cv_folds: int = 0,
         feature_names: list[str] | None = None,
+        sample_weight: np.ndarray | None = None,
     ) -> dict:
         """Fit the model and return evaluation metrics.
 
@@ -60,6 +65,7 @@ class RuntimePredictor:
         y : array of shape (n_samples,) - runtimes in seconds
         algorithm_name : stored for later reference
         cv_folds : number of cross-validation folds (0 to skip)
+        sample_weight : optional per-sample weights for fitting
 
         Returns
         -------
@@ -68,7 +74,10 @@ class RuntimePredictor:
         self.algorithm_name = algorithm_name
         if feature_names is not None:
             self.feature_names = list(feature_names)
-        self.model.fit(X, y)
+        if sample_weight is not None:
+            self.model.fit(X, y, sample_weight=sample_weight)
+        else:
+            self.model.fit(X, y)
         self._is_fitted = True
 
         y_pred = self.model.predict(X)
@@ -76,14 +85,23 @@ class RuntimePredictor:
             "mae": float(mean_absolute_error(y, y_pred)),
             "r2": float(r2_score(y, y_pred)),
         }
+        if hasattr(self.model, "oob_score_"):
+            metrics["oob_r2"] = float(self.model.oob_score_)
 
         if cv_folds > 0 and len(y) >= cv_folds:
+            n_splits = min(cv_folds, len(y))
+            splitter = KFold(n_splits=n_splits, shuffle=True, random_state=42)
             self.cv_scores = cross_val_score(
-                self.model, X, y,
-                cv=cv_folds, scoring="neg_mean_absolute_error",
+                self.model,
+                X,
+                y,
+                cv=splitter,
+                scoring="neg_mean_absolute_error",
             )
             metrics["cv_mean_mae"] = float(-self.cv_scores.mean())
             metrics["cv_std_mae"] = float(self.cv_scores.std())
+            metrics["cv_mae_scores"] = [float(-s) for s in self.cv_scores]
+            metrics["cv_folds_used"] = int(len(self.cv_scores))
 
         return metrics
 

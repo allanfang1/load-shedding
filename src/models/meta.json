@@ -3,8 +3,8 @@
   "feature_names": [
     "pre_num_nodes",
     "pre_num_edges",
-    "pre_density",
-    "pre_avg_degree",
+    "pre_log_num_nodes",
+    "pre_log_num_edges",
     "pre_is_directed",
     "budget"
   ]

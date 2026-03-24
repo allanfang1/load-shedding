@@ -9,6 +9,7 @@ aligned and avoids any graph traversal.
 from __future__ import annotations
 
 import networkx as nx
+import math
 
 
 def extract_features(G: nx.Graph) -> dict[str, float]:
@@ -41,19 +42,16 @@ def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
     """
     if n == 0:
         return {
-            "num_nodes": 0, "num_edges": 0, "density": 0.0,
-            "avg_degree": 0.0, "is_directed": is_directed,
+            "num_nodes": 0, "num_edges": 0, "log_num_nodes": 0.0, "log_num_edges": 0.0,
+            "is_directed": is_directed,
         }
 
-    denom = n * (n - 1) if is_directed else n * (n - 1) / 2
-    density = m / denom if denom else 0.0
-    avg_degree = (m / n) if is_directed else (2 * m / n)
 
     return {
         "num_nodes": n,
         "num_edges": m,
-        "density": density,
-        "avg_degree": avg_degree,
+        "log_num_nodes": math.log2(n) if n > 0 else 0.0,
+        "log_num_edges": math.log2(m) if m > 0 else 0.0, 
         "is_directed": is_directed,
     }
 
