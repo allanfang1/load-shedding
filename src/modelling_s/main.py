@@ -5,8 +5,7 @@ Workflow
 -------
 1. **collect**  - Load graph files, run algorithms, measure time, save CSV.
 2. **train**    - Load CSV, train an ML model per algorithm, save model.
-3. **predict**  - Load a saved model + a graph, print predicted runtime.
-4. **run-all**  - Do collect → train end-to-end.
+3. **run-all**  - Do collect → train end-to-end.
 
 Usage examples
 --------------
@@ -18,9 +17,6 @@ Usage examples
 
     # Train a model for pagerank
     python main.py train --csv timings.csv --algo pagerank --model-dir models
-
-    # Predict runtime for a new graph
-    python main.py predict --model-dir models --graph ../data/test_graph.txt
 
     # End-to-end (sample from real data → train)
     python main.py run-all --sample-file ../data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir models
@@ -37,6 +33,7 @@ from pathlib import Path
 
 import networkx as nx
 import numpy as np
+from sklearn.utils import shuffle
 
 try:
     from modelling_s.algorithms import ALGORITHM_REGISTRY, get_algorithm, list_algorithms
@@ -392,8 +389,11 @@ def cmd_train(args):
 
     y = np.array([float(r[target_name]) for r in rows])
 
+    X, y = shuffle(X, y, random_state=42)
+
     print(f"Training on {len(y)} samples for '{algo_name}' ...")
     print(f"Using features (in order): {selected_features}")
+
     predictor = RuntimePredictor()
 
     metrics = predictor.fit(
@@ -404,15 +404,21 @@ def cmd_train(args):
         feature_names=selected_features,
     )
 
-    print(f"  MAE:        {metrics['mae']:.6f}s")
+    print(f"  MAE:        {metrics['mae']:.6f}")
     print(f"  R²:         {metrics['r2']:.4f}")
+    if "oob_r2" in metrics:
+        print(f"  OOB R²:     {metrics['oob_r2']:.4f}")
     if "cv_mean_mae" in metrics:
-        print(f"  CV MAE:     {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}")
+        folds_used = metrics.get("cv_folds_used", args.cv_folds)
+        print(f"  CV MAE:     {metrics['cv_mean_mae']:.6f} ± {metrics['cv_std_mae']:.6f}  ({folds_used} folds)")
+        if "cv_mae_scores" in metrics:
+            fold_text = ", ".join(f"{v:.4f}" for v in metrics["cv_mae_scores"])
+            print(f"  Fold MAE:   [{fold_text}]")
         train_cv_gap = metrics["cv_mean_mae"] - metrics["mae"]
         ratio = metrics["cv_mean_mae"] / max(metrics["mae"], 1e-12)
-        print(f"  CV-Train gap: {train_cv_gap:+.6f}s  (ratio={ratio:.2f}x)")
+        print(f"  CV-Train gap: {train_cv_gap:+.6f}  (ratio={ratio:.2f}x)")
         if ratio > 1.20:
-            print("  Note: gap suggests possible overfitting; consider shallower trees or larger min_samples_*")
+            print("  Note: gap suggests possible overfitting; consider more diverse training samples")
     elif args.cv_folds > 0:
         print(f"  CV skipped: need at least {args.cv_folds} samples, got {len(y)}")
 
@@ -423,40 +429,6 @@ def cmd_train(args):
 
     predictor.save(args.model_dir)
     print(f"\nModel saved to {args.model_dir}/")
-
-
-def cmd_predict(args):
-    """Load a trained model and predict runtime for a graph."""
-    predictor = RuntimePredictor.load(args.model_dir)
-    G = load_graph_from_edgelist(args.graph, directed=True)
-    features = extract_features(G)
-
-    if args.features:
-        try:
-            requested = parse_feature_list(args.features, FEATURE_NAMES)
-        except ValueError as e:
-            print(f"Invalid --features: {e}")
-            sys.exit(1)
-
-        if requested != predictor.feature_names:
-            print("Requested --features do not match model feature schema.")
-            print(f"  Requested: {requested}")
-            print(f"  Model:     {predictor.feature_names}")
-            print("Retrain the model with the desired feature list if you want to change schema.")
-            sys.exit(1)
-
-    start = time.perf_counter()
-    predicted = predictor.predict(features)
-    pred_time = time.perf_counter() - start
-
-    print(f"Graph:       {args.graph}")
-    print(f"  Nodes:     {features['num_nodes']}")
-    print(f"  Edges:     {features['num_edges']}")
-    print(f"  Density:   {features['density']:.6f}")
-    print(f"  Avg degree:{features['avg_degree']:.2f}")
-    print(f"  Features:  {predictor.feature_names}")
-    print(f"\nPredicted runtime for '{predictor.algorithm_name}': {predicted:.6f}s")
-    print(f"(prediction itself took {pred_time*1e6:.0f}µs)")
 
 
 def cmd_run_all(args):
@@ -514,15 +486,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--cv-folds", type=int, default=5,
                          help="Cross-validation folds (0 to disable, default: 5)")
 
-    # -- predict -------------------------------------------------------
-    p_predict = sub.add_parser("predict", help="Predict runtime for a graph")
-    p_predict.add_argument("--model-dir", type=str, required=True,
-                           help="Directory with saved model")
-    p_predict.add_argument("--graph", type=str, required=True,
-                           help="Path to graph edge-list file")
-    p_predict.add_argument("--features", type=str, default=None,
-                           help="Optional schema check. Must exactly match model feature list")
-
     # -- run-all -------------------------------------------------------
     p_all = sub.add_parser("run-all", help="Collect + Train end-to-end")
     p_all.add_argument("--graph-dir", type=str, default=None)
@@ -552,7 +515,6 @@ def main():
     cmd_map = {
         "collect": cmd_collect,
         "train": cmd_train,
-        "predict": cmd_predict,
         "run-all": cmd_run_all,
     }
     cmd_map[args.command](args)
