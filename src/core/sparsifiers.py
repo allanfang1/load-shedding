@@ -1,9 +1,10 @@
 import random
+import networkx as nx
 
 
 def modified_spectral_sparsify(
     timed_list,
-    graph,
+    graph: nx.Graph,
     remove_edge_fn,
     s,
     end_time=None,
@@ -32,7 +33,7 @@ def modified_spectral_sparsify(
             davg = 2 * graph.number_of_edges() / graph.number_of_nodes()
     else:
         davg = 0
-        
+
     curr = timed_list.head
 
     removed = 0

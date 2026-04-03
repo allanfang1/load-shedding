@@ -16,7 +16,7 @@ async def window_trigger(wm: WindowManager, slide: float, base: float):
     tick = 1
     while True:
         next_fire = base + tick * slide
-        now = time.perf_counter()
+        now = time.perf_counter() # might be better to use loop.time()
         await asyncio.sleep(max(0, next_fire - now))
 
         close_time = base + tick * slide  # exact boundary, not perf_counter()
@@ -27,10 +27,10 @@ async def main():
     print("hello world")
     # f = open("../data/test_graph.txt", "r")
     g = nx.DiGraph()
-    algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
+    algorithm = nx.betweenness_centrality # nx.pagerank # nx.k_core
     SPEED = 1.0 # seconds between edge arrivals (process time)
-    WINDOW_SIZE = 10 # in dataset timestamp units
-    SLIDE = 5 # in dataset timestamp units
+    WINDOW_SIZE = 10 # in system seconds
+    SLIDE = 5 # in system seconds
     base = time.perf_counter()
 
     # Load trained predictor for load shedding (if available)
