@@ -252,13 +252,13 @@ python main.py collect --sample-file ../../data/higgs-activity_time_postprocess.
 ### 6.3 Train a model
 
 ```bash
-python main.py train --csv timings.csv --algo pagerank --model-dir models
+python main.py train --csv timings.csv --algo pagerank --model-dir models --features pre_num_nodes,pre_num_edges,pre_log_num_nodes,pre_log_num_edges,pre_is_directed,budget
 ```
 
 ### 6.4 End-to-end in one command
 
 ```bash
-python main.py run-all --sample-file ../../data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir models
+python main.py run-all --sample-file ../../data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir models --features pre_num_nodes,pre_num_edges,pre_log_num_nodes,pre_log_num_edges,pre_is_directed,budget
 ```
 
 Note: inference is intentionally external to this CLI. The exported artifacts in `--model-dir` (`model.joblib`, `meta.json`) should be loaded by the runtime component that owns prediction.

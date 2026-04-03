@@ -55,7 +55,7 @@ class WindowManager:
         n = graph.number_of_nodes()
         m = graph.number_of_edges()
         is_directed = int(graph.is_directed())
-        
+
         return {
             "pre_num_nodes": float(n),
             "pre_num_edges": float(m),
