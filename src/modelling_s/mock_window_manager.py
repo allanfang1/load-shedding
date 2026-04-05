@@ -2,6 +2,7 @@ from collections import defaultdict
 import networkx as nx
 from core.timed_linkedlist import TimedLL
 from core.sparsifiers import modified_spectral_sparsify
+from core.moments import Moments
 
 class MockWindowManager:
     """
@@ -18,6 +19,8 @@ class MockWindowManager:
 
         self.timed_list = TimedLL()
         self.edge_count = defaultdict(int)
+        self.in_moments = Moments()
+        self.out_moments = Moments()
 
     def addEdge(self, s, d, t):
         if self.base_time is not None and t < self.base_time:
@@ -25,6 +28,8 @@ class MockWindowManager:
         self.timed_list.append(s, d, t)
         self.edge_count[(s, d)] += 1
         self.graph.add_edge(s, d)
+        self.in_moments.increment_update(self.graph.in_degree(d))
+        self.out_moments.increment_update(self.graph.out_degree(s))
 
     def removeBefore(self, t):
         while self.timed_list.head and self.timed_list.head.t < t:
@@ -41,6 +46,8 @@ class MockWindowManager:
         Returns True if edge was removed from graph, False otherwise."""
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
+            self.in_moments.decrement_update(self.graph.in_degree(d))
+            self.out_moments.decrement_update(self.graph.out_degree(s))
             if self.graph.has_edge(s, d):
                 self.graph.remove_edge(s, d)
             if s in self.graph and self.graph.degree(s) == 0:

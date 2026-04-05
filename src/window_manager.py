@@ -6,6 +6,7 @@ import networkx as nx
 from load_shed_manager import LoadShedManager
 from core.timed_linkedlist import TimedLL
 from core.sparsifiers import modified_spectral_sparsify
+from core.moments import Moments
 
 class WindowManager:
     def __init__(self, window_size, slide, graph, algo, base_time=0, predictor=None):
@@ -34,6 +35,9 @@ class WindowManager:
         
         self.timed_list = TimedLL()
         self.edge_count = defaultdict(int)
+        self.in_moments = Moments()
+        self.out_moments = Moments()
+
         self.window_log = "timing_log.txt"
         self.algo_log = "algo_log.txt"
 
@@ -104,8 +108,10 @@ class WindowManager:
         for s, d, t in edges:
             self.timed_list.append(s, d, t)
             self.edge_count[(s, d)] += 1
-            self.graph.add_edge(s, d)
             if self.edge_count[(s, d)] == 1:
+                self.graph.add_edge(s, d)
+                self.in_moments.increment_update(self.graph.in_degree(d))
+                self.out_moments.increment_update(self.graph.out_degree(s))
                 print(f"Edge added: {s} -> {d}, time: {t}")
 
     def runAlgo(self, snapshot):
@@ -129,13 +135,14 @@ class WindowManager:
             self.removeEdge(s, d)
             print(f"Edge removed: {s} -> {d}, time: {edge_t}")
 
-
     def removeEdge(self, s, d):
         """Decrement multiplicity of edge (s, d) and remove from graph if count reaches 0.
         Returns True if edge was removed from graph, False otherwise."""
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
             print(f"Edge removed from graph: {s} -> {d}")
+            self.in_moments.decrement_update(self.graph.in_degree(d))
+            self.out_moments.decrement_update(self.graph.out_degree(s))
             self.graph.remove_edge(s, d)
             if self.graph.degree(s) == 0:
                 self.graph.remove_node(s)

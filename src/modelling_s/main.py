@@ -89,7 +89,7 @@ def discover_graph_files(directory: str, extensions: tuple = (".txt",)) -> list[
 def sample_window_snapshots(
     filepath: str,
     num_snapshots: int = 30,
-    max_edges: int = 5000,
+    max_edges: int = 10,
     directed: bool = True,
 ) -> list[tuple[str, nx.Graph]]:
     """Sample sliding-window-style graph snapshots from a real edge-list file.
@@ -119,7 +119,7 @@ def sample_window_snapshots(
     with open(filepath) as f:
         for line in f:
             parts = line.strip().split()
-            if len(parts) >= 2:
+            if len(parts) >= 2 and parts[2] != "-1":
                 edges.append((parts[0], parts[1]))
 
     total = len(edges)
