@@ -46,7 +46,6 @@ def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
             "is_directed": is_directed,
         }
 
-
     return {
         "num_nodes": n,
         "num_edges": m,

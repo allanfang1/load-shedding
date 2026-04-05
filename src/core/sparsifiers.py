@@ -19,8 +19,6 @@ def modified_spectral_sparsify(
         Current snapshot graph.
     remove_edge_fn : Callable[[Any, Any], None]
         Callback that decrements multiplicity and removes graph edge/node when needed.
-    get_average_degree_fn : Callable[[graph], float]
-        Graph average degree function.
     s : float
         Sparsification strength parameter.
     end_time : float | None
@@ -29,8 +27,8 @@ def modified_spectral_sparsify(
     if graph.number_of_nodes() > 0:
         if graph.is_directed():
             davg = graph.number_of_edges() / graph.number_of_nodes()
-        else:
-            davg = 2 * graph.number_of_edges() / graph.number_of_nodes()
+        # else:
+        #     davg = 2 * graph.number_of_edges() / graph.number_of_nodes()
     else:
         davg = 0
 

@@ -1,5 +1,5 @@
 {
-  "algorithm_name": "betweenness_centrality",
+  "algorithm_name": "pagerank",
   "feature_names": [
     "pre_num_nodes",
     "pre_num_edges",
