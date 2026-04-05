@@ -48,8 +48,7 @@ class MockWindowManager:
         if self.edge_count[(s, d)] == 0:
             self.in_moments.decrement_update(self.graph.in_degree(d))
             self.out_moments.decrement_update(self.graph.out_degree(s))
-            if self.graph.has_edge(s, d):
-                self.graph.remove_edge(s, d)
+            self.graph.remove_edge(s, d)
             if s in self.graph and self.graph.degree(s) == 0:
                 self.graph.remove_node(s)
             if d in self.graph and self.graph.degree(d) == 0:
