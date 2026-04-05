@@ -12,7 +12,7 @@ import networkx as nx
 import math
 
 
-def extract_features(G: nx.Graph) -> dict[str, float]:
+def extract_features(G: nx.Graph, avg_in, avg_out, var_in, var_out, skew_in, skew_out) -> dict[str, float]:
     """Return a flat dict of numeric graph properties.
 
     Only uses O(1) calls: number_of_nodes(), number_of_edges(),
@@ -30,10 +30,10 @@ def extract_features(G: nx.Graph) -> dict[str, float]:
     m = G.number_of_edges()
     is_dir = int(G.is_directed())
 
-    return features_from_nm(n, m, is_dir)
+    return features_from_nm(n, m, is_dir, avg_in, avg_out, var_in, var_out, skew_in, skew_out)
 
 
-def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
+def features_from_nm(n: int, m: int, is_directed: int = 1, avg_in: float = 0.0, avg_out: float = 0.0, var_in: float = 0.0, var_out: float = 0.0, skew_in: float = 0.0, skew_out: float = 0.0) -> dict[str, float]:
     """Build the feature dict from just node/edge counts.
 
     Usable both during training (from a real graph's n, m) and during
@@ -43,7 +43,7 @@ def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
     if n == 0:
         return {
             "num_nodes": 0, "num_edges": 0, "log_num_nodes": 0.0, "log_num_edges": 0.0,
-            "is_directed": is_directed,
+            "is_directed": is_directed, "avg_in": avg_in, "avg_out": avg_out, "var_in": var_in, "var_out": var_out, "skew_in": skew_in, "skew_out": skew_out
         }
 
     return {
@@ -52,6 +52,12 @@ def features_from_nm(n: int, m: int, is_directed: int = 1) -> dict[str, float]:
         "log_num_nodes": math.log2(n) if n > 0 else 0.0,
         "log_num_edges": math.log2(m) if m > 0 else 0.0, 
         "is_directed": is_directed,
+        "avg_in": avg_in,
+        "avg_out": avg_out,
+        "var_in": var_in,
+        "var_out": var_out,
+        "skew_in": skew_in,
+        "skew_out": skew_out
     }
 
 
