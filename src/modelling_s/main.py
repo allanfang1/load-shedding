@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -159,21 +160,52 @@ def sample_window_snapshots(
 # Data collection
 # ======================================================================
 
-def time_algorithm(algo_fn, G: nx.Graph, repeats: int = 3) -> float:
-    """Run *algo_fn* on *G* ``repeats`` times and return **median** wall time."""
+def time_algorithm(algo_fn, G: nx.Graph, repeats: int = 3) -> tuple[float, object | None]:
+    """Run *algo_fn* on *G* ``repeats`` times.
+
+    Returns
+    -------
+    tuple
+        (median_wall_time_seconds, first_run_result)
+    """
     times = []
+    first_result = None
     for _ in range(repeats):
         start = time.perf_counter()
-        algo_fn(G)
+        result = algo_fn(G)
         elapsed = time.perf_counter() - start
         times.append(elapsed)
-    return float(np.median(times))
+        if first_result is None:
+            first_result = result
+    return float(np.median(times)), first_result
+
+
+def top_k_from_mapping(result: object, k: int = 5) -> list[tuple[str, float]]:
+    """Extract top-k (key, value) pairs from a mapping-like algorithm result."""
+    if not isinstance(result, dict):
+        return []
+
+    scored_items: list[tuple[str, float]] = []
+    for key, value in result.items():
+        try:
+            scored_items.append((str(key), float(value)))
+        except (TypeError, ValueError):
+            continue
+
+    scored_items.sort(key=lambda x: x[1], reverse=True)
+    return scored_items[:k]
 
 
 def clone_window_manager(wm: MockWindowManager) -> MockWindowManager:
     """Create a safe copy of a MockWindowManager without using deepcopy."""
     graph_copy = wm.graph.copy()
     cloned = MockWindowManager(graph_copy, wm.algo, wm.base_time)
+    cloned.in_moments.s1 = wm.in_moments.s1
+    cloned.in_moments.s2 = wm.in_moments.s2
+    cloned.in_moments.s3 = wm.in_moments.s3
+    cloned.out_moments.s1 = wm.out_moments.s1
+    cloned.out_moments.s2 = wm.out_moments.s2
+    cloned.out_moments.s3 = wm.out_moments.s3
 
     curr = wm.timed_list.head
     while curr is not None:
@@ -199,17 +231,19 @@ def collect_timings(
     rows = []
     num_s_samples = 16
     total = len(graphs) * num_s_samples * len(algo_names)
-    low, high = 0.1, 10
+    low, high = 0.1, 6
     done = 0
     progress = 0
     for label, wm in graphs:
-        pre_features = extract_features(wm.graph)
+        vert_count = wm.graph.number_of_nodes()
+        pre_features = extract_features(wm.graph, wm.in_moments.get_mean(vert_count), wm.out_moments.get_mean(vert_count), wm.in_moments.get_variance(vert_count), wm.out_moments.get_variance(vert_count), wm.in_moments.get_skewness(vert_count), wm.out_moments.get_skewness(vert_count))
         for s_value in np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=num_s_samples))):
             tmp_wm = clone_window_manager(wm)
             begin_shed = time.perf_counter()
             tmp_wm.modifiedSpectralSparsity(s_value)
             end_shed = time.perf_counter()
-            post_features = extract_features(tmp_wm.graph)
+            vert_count = tmp_wm.graph.number_of_nodes()
+            post_features = extract_features(tmp_wm.graph, tmp_wm.in_moments.get_mean(vert_count), tmp_wm.out_moments.get_mean(vert_count), tmp_wm.in_moments.get_variance(vert_count), tmp_wm.out_moments.get_variance(vert_count), tmp_wm.in_moments.get_skewness(vert_count), tmp_wm.out_moments.get_skewness(vert_count))
             for algo_name in algo_names:
                 done += 1
                 progress += 1
@@ -218,11 +252,17 @@ def collect_timings(
                     f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
                     end=" ", flush=True)
                 try:
-                    rt = time_algorithm(algo_fn, tmp_wm.graph, repeats=repeats)
+                    rt, algo_result = time_algorithm(algo_fn, tmp_wm.graph, repeats=repeats)
                     print(f"{rt:.4f}s")
                 except Exception as e:
                     print(f"FAILED ({e})")
                     rt = float("nan")
+                    algo_result = None
+
+                pagerank_top10 = ""
+                if algo_name == "pagerank":
+                    pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+
                 row = {
                     **{f"pre_{k}": v for k, v in pre_features.items()},
                     **{f"post_{k}": v for k, v in post_features.items()},
@@ -232,6 +272,8 @@ def collect_timings(
                     "runtime": rt,
                     "shed_time": end_shed - begin_shed,
                     "budget": rt + (end_shed - begin_shed),
+                    "pagerank_top10": pagerank_top10,
+                    
                 }
                 rows.append(row)
 
@@ -359,7 +401,7 @@ def cmd_train(args):
         sys.exit(1)
 
     target_name = "s_value"
-    excluded_columns = {"graph_label", "algorithm", target_name}
+    excluded_columns = {"graph_label", "algorithm", target_name, "pagerank_top10"}
     available_numeric_features = [
         key for key in rows[0].keys() if key not in excluded_columns
     ]

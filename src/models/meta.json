@@ -6,6 +6,12 @@
     "pre_log_num_nodes",
     "pre_log_num_edges",
     "pre_is_directed",
-    "budget"
+    "budget",
+    "pre_avg_in",
+    "pre_avg_out",
+    "pre_var_in",
+    "pre_var_out",
+    "pre_skew_in",
+    "pre_skew_out"
   ]
 }

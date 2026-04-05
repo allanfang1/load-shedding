@@ -27,9 +27,12 @@ class MockWindowManager:
             return
         self.timed_list.append(s, d, t)
         self.edge_count[(s, d)] += 1
+        if self.edge_count[(s, d)] > 1:
+            return
+
         self.graph.add_edge(s, d)
-        self.in_moments.increment_update(self.graph.in_degree(d))
-        self.out_moments.increment_update(self.graph.out_degree(s))
+        self.in_moments.increment_update(self.graph.in_degree(d)-1)
+        self.out_moments.increment_update(self.graph.out_degree(s)-1)
 
     def removeBefore(self, t):
         while self.timed_list.head and self.timed_list.head.t < t:
