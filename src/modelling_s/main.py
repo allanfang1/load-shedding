@@ -388,6 +388,60 @@ def cmd_collect(args):
     rows = collect_timings(graphs, algo_names=algo_names, repeats=args.repeats)
     save_timings_csv(rows, args.out)
 
+    out_path = Path(args.out)
+    gt_out = str(out_path.with_name(f"{out_path.stem}_ground_truth{out_path.suffix or '.csv'}"))
+    print("\nCollecting ground-truth timings (no shedding) ...")
+    gt_rows = []
+    gt_algo_names = algo_names if algo_names is not None else list_algorithms()
+    gt_total = len(graphs) * len(gt_algo_names)
+    gt_progress = 0
+    for label, wm in graphs:
+        vert_count = wm.graph.number_of_nodes()
+        features = extract_features(
+            wm.graph,
+            wm.in_moments.get_mean(vert_count),
+            wm.out_moments.get_mean(vert_count),
+            wm.in_moments.get_variance(vert_count),
+            wm.out_moments.get_variance(vert_count),
+            wm.in_moments.get_skewness(vert_count),
+            wm.out_moments.get_skewness(vert_count),
+        )
+        for algo_name in gt_algo_names:
+            gt_progress += 1
+            algo_fn = get_algorithm(algo_name)
+            print(
+                f"  [GT {gt_progress}/{gt_total}] {algo_name} on {label} "
+                f"(n={wm.graph.number_of_nodes()}, m={wm.graph.number_of_edges()}) ...",
+                end=" ",
+                flush=True,
+            )
+            try:
+                begin = time.perf_counter()
+                algo_result = algo_fn(wm.graph)
+                rt = time.perf_counter() - begin
+                print(f"{rt:.4f}s")
+            except Exception as e:
+                print(f"FAILED ({e})")
+                rt = float("nan")
+                algo_result = None
+
+            pagerank_top10 = ""
+            if algo_name == "pagerank":
+                pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+
+            gt_rows.append(
+                {
+                    **{f"pre_{k}": v for k, v in features.items()},
+                    "graph_label": label,
+                    "algorithm": algo_name,
+                    "runtime": rt,
+                    "budget": rt,
+                    "pagerank_top10": pagerank_top10,
+                }
+            )
+
+    save_timings_csv(gt_rows, gt_out)
+
 
 def cmd_train(args):
     """Train an ML model from a collected CSV."""
