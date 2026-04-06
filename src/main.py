@@ -24,8 +24,6 @@ async def window_trigger(wm: WindowManager, slide: float, base: float):
         tick += 1
 
 async def main():
-    print("hello world")
-    # f = open("../data/test_graph.txt", "r")
     g = nx.DiGraph() # we are using a digraph
     algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
     SPEED = 1.0 # seconds between edge arrivals (process time)

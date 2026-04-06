@@ -1,5 +1,8 @@
 from collections import defaultdict
+import json
 import math
+import os
+import csv
 import random
 import time
 import networkx as nx
@@ -38,8 +41,8 @@ class WindowManager:
         self.in_moments = Moments()
         self.out_moments = Moments()
 
-        self.window_log = "timing_log.txt"
-        self.algo_log = "algo_log.txt"
+        
+        self.log_file = "timings.csv"
 
         self.ingest_buffer = []
 
@@ -95,7 +98,8 @@ class WindowManager:
 
         remaining_time = close_time + self.slide - time.perf_counter()
 
-        # LOAD SHEDDING Derive shed parameter TODO validate this works
+        # LOAD SHEDDING Derive shed parameter
+        begin_use_budget = time.perf_counter()
         if self.load_shed_manager is not None:
             predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
             shed_param = float(predicted_s)
@@ -104,11 +108,16 @@ class WindowManager:
                   f"current_edges={self.graph.number_of_edges()})")
             self.modifiedSpectralSparsity(close_time, s=shed_param)
 
-        # run algo
-        # self.runAlgo(self.graph)
-        # print(f"Window moved to [{self.window_start}, {self.window_start + self.window_size})")
+        self.runAlgo(self.graph)
+        
+        self.append_row({"window": self.window_start,
+                         "budget": remaining_time,
+                         "actual_runtime": time.perf_counter() - begin_use_budget,
+                         "pagerank_top10": json.dumps(self.runAlgo(self.graph))
+                         })
 
         self.window_start = close_time - self.window_size + self.slide
+      
 
     def batchAddEdges(self, edges):
         for s, d, t in edges:
@@ -121,20 +130,18 @@ class WindowManager:
                 print(f"Edge added: {s} -> {d}, time: {t}")
 
     def runAlgo(self, snapshot):
-        start_time = time.perf_counter()
+        # start_time = time.perf_counter()
         result = self.algo(snapshot)
-        end_time = time.perf_counter()
-        elapsed = end_time - start_time
+        # end_time = time.perf_counter()
+        # elapsed = end_time - start_time
+        k = 10
 
-        with open(self.algo_log, "a") as f:
-            f.write(
-                f"{start_time}, "
-                f"{end_time}, "
-                f"{elapsed},"
-                f"{result}\n"
-            )
-        # TODO: store or print results - compare to ground truth
-    
+        return sorted(
+            ((str(k), float(v)) for k, v in result.items()),
+            key=lambda x: x[1],
+            reverse=True
+        )[:k]
+        
     def removeBefore(self, t):
         while self.timed_list.head and self.timed_list.head.t < t:
             s, d, edge_t = self.timed_list.popleft()
@@ -159,6 +166,21 @@ class WindowManager:
             del self.edge_count[(s, d)]
             return True
         return False
+
+    def append_row(self, row: dict) -> None:
+        self.log_file
+        os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
+        
+        file_exists = os.path.exists(self.log_file)
+        
+        with open(self.log_file, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            
+            if not file_exists:
+                writer.writeheader()
+            
+            writer.writerow(row)
+            print(f"Saved row to {self.log_file}")
 
 # ======================================================================
 # Sparsifiers
