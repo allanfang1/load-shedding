@@ -5,6 +5,7 @@ import os
 import csv
 import random
 import time
+from queue import SimpleQueue, Empty
 import networkx as nx
 from load_shed_manager import LoadShedManager
 from core.timed_linkedlist import TimedLL
@@ -44,7 +45,7 @@ class WindowManager:
         
         self.log_file = "timings.csv"
 
-        self.ingest_buffer = []
+        self.ingest_queue = SimpleQueue()
 
         self.load_shed_manager = (
             LoadShedManager(predictor, feature_builder=self.build_predictor_features)
@@ -78,23 +79,30 @@ class WindowManager:
             "pre_skew_out": out_moments.get_skewness(n)
         }
 
-    def addEdge(self, s, d, t):
-        if t < self.window_start:
-            return
-        print(f"Edge received: {s} -> {d}, time: {t}")
-        self.ingest_buffer.append((s, d, t))
+    def addEdge(self, raw):
+        parts = raw.split()
+        ts = time.perf_counter()
+        self.ingest_queue.put((int(parts[0]), int(parts[1]), ts))
+
+    def _drain_ingest_queue(self):
+        edges = []
+        while True:
+            try:
+                edges.append(self.ingest_queue.get_nowait())
+            except Empty:
+                break
+        return edges
     
     def runCompleteWindow(self, close_time):
-        # add remaining edges in buffer
-        print(f"Running complete window at time {close_time - self.window_size} to {close_time} ({self.window_size})")
-        self.batchAddEdges(self.ingest_buffer)
-        self.ingest_buffer = []
+        # add remaining edges in queue
+        drained_edges = self._drain_ingest_queue()
+        print(f"Running complete window at time {close_time - self.window_size} to {close_time} ({len(drained_edges)} buffered edges)")
+        self.batchAddEdges(drained_edges)
 
         # shift window to close_time
         self.removeBefore(close_time - self.window_size)
 
-        print(f"Edge count: {self.edge_count}")
-        print(f"Timed list size: {self.timed_list.size}")
+        full_edge_count = self.graph.number_of_edges()
 
         remaining_time = close_time + self.slide - time.perf_counter()
 
@@ -103,17 +111,19 @@ class WindowManager:
         if self.load_shed_manager is not None:
             predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
             shed_param = float(predicted_s)
-            print(f"Load shed parameter: {shed_param} "
-                  f"(remaining_time={remaining_time:.4f}s, "
-                  f"current_edges={self.graph.number_of_edges()})")
-            self.modifiedSpectralSparsity(close_time, s=shed_param)
+            # print(f"Load shed parameter: {shed_param} "
+            #       f"(remaining_time={remaining_time:.4f}s, "
+            #       f"current_edges={self.graph.number_of_edges()})")
+            shed_count = self.modifiedSpectralSparsity(close_time, s=shed_param)
 
-        self.runAlgo(self.graph)
+        result = self.runAlgo(self.graph)
         
         self.append_row({"window": self.window_start,
+                         "edge_count": full_edge_count,
+                         "shed_count": shed_count if self.load_shed_manager else 0,
                          "budget": remaining_time,
                          "actual_runtime": time.perf_counter() - begin_use_budget,
-                         "pagerank_top10": json.dumps(self.runAlgo(self.graph))
+                         "pagerank_top10": json.dumps(result)
                          })
 
         self.window_start = close_time - self.window_size + self.slide
@@ -127,7 +137,7 @@ class WindowManager:
                 self.graph.add_edge(s, d)
                 self.in_moments.increment_update(self.graph.in_degree(d)-1)
                 self.out_moments.increment_update(self.graph.out_degree(s)-1)
-                print(f"Edge added: {s} -> {d}, time: {t}")
+                # print(f"Edge added: {s} -> {d}, time: {t}")
 
     def runAlgo(self, snapshot):
         # start_time = time.perf_counter()
@@ -146,23 +156,23 @@ class WindowManager:
         while self.timed_list.head and self.timed_list.head.t < t:
             s, d, edge_t = self.timed_list.popleft()
             self.removeEdge(s, d)
-            print(f"Edge removed: {s} -> {d}, time: {edge_t}")
+            # print(f"Edge removed: {s} -> {d}, time: {edge_t}")
 
     def removeEdge(self, s, d):
         """Decrement multiplicity of edge (s, d) and remove from graph if count reaches 0.
         Returns True if edge was removed from graph, False otherwise."""
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
-            print(f"Edge removed from graph: {s} -> {d}")
+            # print(f"Edge removed from graph: {s} -> {d}")
             self.in_moments.decrement_update(self.graph.in_degree(d))
             self.out_moments.decrement_update(self.graph.out_degree(s))
             self.graph.remove_edge(s, d)
             if self.graph.degree(s) == 0:
                 self.graph.remove_node(s)
-                print(f"Node removed: {s}")
+                # print(f"Node removed: {s}")
             if self.graph.degree(d) == 0:
                 self.graph.remove_node(d)
-                print(f"Node removed: {d}")
+                # print(f"Node removed: {d}")
             del self.edge_count[(s, d)]
             return True
         return False
@@ -201,7 +211,8 @@ class WindowManager:
             end_time=end_time,
         )
 
-        print(f"Edges shed: {edges_shed}")
+        return edges_shed
+        # print(f"Edges shed: {edges_shed}")
 
 
     def randomSparsity(self, s): # TODO
