@@ -110,8 +110,8 @@ class WindowManager:
             self.edge_count[(s, d)] += 1
             if self.edge_count[(s, d)] == 1:
                 self.graph.add_edge(s, d)
-                self.in_moments.increment_update(self.graph.in_degree(d))
-                self.out_moments.increment_update(self.graph.out_degree(s))
+                self.in_moments.increment_update(self.graph.in_degree(d)-1)
+                self.out_moments.increment_update(self.graph.out_degree(s)-1)
                 print(f"Edge added: {s} -> {d}, time: {t}")
 
     def runAlgo(self, snapshot):
