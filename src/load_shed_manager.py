@@ -10,6 +10,7 @@ import networkx as nx
 from typing import Any, Callable
 
 from modelling_s.runtime_predictor import RuntimePredictor
+from core.moments import Moments
 
 
 class LoadShedManager:
@@ -31,7 +32,7 @@ class LoadShedManager:
     def __init__(
         self,
         predictor: RuntimePredictor,
-        feature_builder: Callable[[nx.Graph, float], dict[str, float]],
+        feature_builder: Callable[[nx.Graph, float, Moments, Moments], dict[str, float]],
         output_adapter: Callable[[float, dict[str, float], nx.Graph, float], Any] | None = None,
     ):
         self.predictor = predictor
@@ -42,9 +43,11 @@ class LoadShedManager:
         self,
         graph: nx.Graph,
         remaining_time: float,
+        in_moments: Moments,
+        out_moments: Moments 
     ) -> Any:
         """Build features, run model inference, and adapt output if requested."""
-        features = self.feature_builder(graph, remaining_time)
+        features = self.feature_builder(graph, remaining_time, in_moments, out_moments)
         model_features = list(getattr(self.predictor, "feature_names", []))
         if model_features and list(features.keys()) != model_features:
             raise ValueError(

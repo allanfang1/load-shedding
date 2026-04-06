@@ -8,7 +8,7 @@ from producer_sim import produce, Edge
 
 from modelling_s.runtime_predictor import RuntimePredictor
 
-DATA = "../data/test_graph.txt" # "../data/higgs-activity_time_postprocess.txt"
+DATA = "../data/ldbc-sf10-updatestream_postprocess.txt" # "../data/higgs-activity_time_postprocess.txt" D:\Desktop\reading\M2\loadshedding\load-shedding\data\ldbc-sf10-updatestream_postprocess.txt
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models") # Directory where trained models are saved/loaded
 
 async def window_trigger(wm: WindowManager, slide: float, base: float):
@@ -27,7 +27,7 @@ async def main():
     print("hello world")
     # f = open("../data/test_graph.txt", "r")
     g = nx.DiGraph() # we are using a digraph
-    algorithm = nx.betweenness_centrality # nx.pagerank # nx.k_core
+    algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
     SPEED = 1.0 # seconds between edge arrivals (process time)
     WINDOW_SIZE = 10 # in system seconds
     SLIDE = 5 # in system seconds

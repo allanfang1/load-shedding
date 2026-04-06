@@ -54,7 +54,7 @@ class WindowManager:
     def warmStart(self):
         self.runAlgo(self.graph)
 
-    def build_predictor_features(self, graph: nx.Graph, remaining_time: float) -> dict[str, float]:
+    def build_predictor_features(self, graph: nx.Graph, remaining_time: float, in_moments: Moments, out_moments: Moments) -> dict[str, float]:
         """Build model input features expected by modelling_s-trained predictor."""
         n = graph.number_of_nodes()
         m = graph.number_of_edges()
@@ -66,7 +66,13 @@ class WindowManager:
             "pre_log_num_nodes": float(math.log2(n)) if n > 0 else 0.0,
             "pre_log_num_edges": float(math.log2(m)) if m > 0 else 0.0,
             "pre_is_directed": float(is_directed),
-            "budget": max(0.0, float(remaining_time)),
+            "budget": max(0.0, float(remaining_time)), # TODO headroom
+            "pre_avg_in": in_moments.get_mean(n),
+            "pre_avg_out": out_moments.get_mean(n),
+            "pre_var_in": in_moments.get_variance(n),
+            "pre_var_out": out_moments.get_variance (n),
+            "pre_skew_in": in_moments.get_skewness(n),
+            "pre_skew_out": out_moments.get_skewness(n)
         }
 
     def addEdge(self, s, d, t):
@@ -91,7 +97,7 @@ class WindowManager:
 
         # LOAD SHEDDING Derive shed parameter TODO validate this works
         if self.load_shed_manager is not None:
-            predicted_s = self.load_shed_manager.predict(self.graph, remaining_time)
+            predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
             shed_param = float(predicted_s)
             print(f"Load shed parameter: {shed_param} "
                   f"(remaining_time={remaining_time:.4f}s, "
