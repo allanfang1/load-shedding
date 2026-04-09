@@ -4,12 +4,38 @@ import time
 import redis
 
 
+def flush_batch(client: redis.Redis, redis_key: str, batch: list[str]) -> int:
+    if not batch:
+        return 0
+    client.rpush(redis_key, *batch)
+    sent_now = len(batch)
+    batch.clear()
+    return sent_now
+
+
 def run_producer(args):
     client = redis.Redis.from_url(args.redis_url, decode_responses=True)
     sent = 0
+    next_report = 50000
     start = time.monotonic()
+    batch: list[str] = []
 
     try:
+        print(
+            "Producer startup | "
+            f"graph_dir={args.graph_dir} | "
+            f"redis_url={args.redis_url} | "
+            f"redis_key={args.redis_key} | "
+            f"max_runtime={args.max_runtime}s | "
+            f"batch_size={args.redis_batch_size} | "
+            f"send_end_sentinel={args.send_end_sentinel} | "
+            f"clear_key_on_start={args.clear_key_on_start}"
+        )
+
+        if args.clear_key_on_start:
+            client.delete(args.redis_key)
+            print(f"Cleared Redis key '{args.redis_key}' before publishing")
+
         with open(args.graph_dir, "r") as fh:
             for raw in fh:
                 if args.max_runtime > 0 and (time.monotonic() - start) >= args.max_runtime:
@@ -20,10 +46,17 @@ def run_producer(args):
                 if not edge:
                     continue
 
-                client.rpush(args.redis_key, edge)
-                sent += 1
-                if sent % 50000 == 0:
-                    print(f"Published {sent} edges")
+                batch.append(edge)
+                if len(batch) >= args.redis_batch_size:
+                    sent += flush_batch(client, args.redis_key, batch)
+                    while sent >= next_report:
+                        print(f"Published {next_report} edges")
+                        next_report += 50000
+
+        sent += flush_batch(client, args.redis_key, batch)
+        while sent >= next_report:
+            print(f"Published {next_report} edges")
+            next_report += 50000
 
         if args.send_end_sentinel:
             client.rpush(args.redis_key, args.end_sentinel)
@@ -51,7 +84,21 @@ def main():
         default=0,
         help="Maximum producer runtime in seconds (0 means no limit)",
     )
+    parser.add_argument(
+        "--redis-batch-size",
+        type=int,
+        default=2000,
+        help="Number of edges to publish per Redis RPUSH call",
+    )
+    parser.add_argument(
+        "--clear-key-on-start",
+        action="store_true",
+        help="Clear the Redis queue key before producing new edges",
+    )
     args = parser.parse_args()
+
+    if args.redis_batch_size <= 0:
+        raise ValueError("--redis-batch-size must be greater than 0")
 
     run_producer(args)
 

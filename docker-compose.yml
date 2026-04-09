@@ -3,7 +3,13 @@ services:
     image: redis:7-alpine
     container_name: loadshedding-redis
     restart: "no"
-    cpus: "2.0"
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    cpus: "0.5"
     mem_limit: "512m"
     mem_reservation: "256m"
 
@@ -14,7 +20,7 @@ services:
     container_name: loadshedding-producer
     depends_on:
       - redis
-    cpus: "2.00"
+    cpus: "0.2"
     mem_limit: "1g"
     mem_reservation: "512m"
     command:
@@ -29,6 +35,9 @@ services:
       - --send-end-sentinel
       - --max-runtime
       - ${STACK_RUNTIME_SECONDS:-120}
+      - --redis-batch-size
+      - ${PRODUCER_BATCH_SIZE:-4000}
+      - --clear-key-on-start
     volumes:
       - ./data:/data:ro
 
@@ -39,7 +48,7 @@ services:
     container_name: loadshedding-main
     depends_on:
       - redis
-    cpus: "2.00"
+    cpus: "4.00"
     mem_limit: "3g"
     mem_reservation: "1g"
     command:
@@ -49,6 +58,8 @@ services:
       - redis://redis:6379/0
       - --redis-key
       - edges
+      - --redis-drain-batch-size
+      - ${CONSUMER_DRAIN_BATCH_SIZE:-4000}
       - --output-dir
       - /app/tests/results.csv
       - --k

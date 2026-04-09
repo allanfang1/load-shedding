@@ -33,6 +33,20 @@ docker compose up --build --abort-on-container-exit --exit-code-from main
 
 Using `--abort-on-container-exit --exit-code-from main` ensures all services stop when `main` exits at the configured runtime.
 
+For higher throughput, tune batching with:
+
+- `PRODUCER_BATCH_SIZE` (default `4000`)
+- `CONSUMER_DRAIN_BATCH_SIZE` (default `4000`)
+
+PowerShell example:
+
+```powershell
+$env:STACK_RUNTIME_SECONDS = "120"
+$env:PRODUCER_BATCH_SIZE = "4000"
+$env:CONSUMER_DRAIN_BATCH_SIZE = "4000"
+docker compose up --build --abort-on-container-exit --exit-code-from main
+```
+
 Output rows are written to `tests/results.csv` (mounted from host).
 
 ## Notes

@@ -53,6 +53,7 @@ async def redis_consumer(
     redis_key: str,
     end_sentinel: str,
     block_timeout: int = 1,
+    drain_batch_size: int = 2000,
 ):
     """Consumes edges from a Redis list and adds them to the WindowManager."""
     client = redis.from_url(redis_url, decode_responses=True)
@@ -63,11 +64,24 @@ async def redis_consumer(
                 await asyncio.sleep(0)
                 continue
 
-            _, edge = message
-            if edge == end_sentinel:
-                print("Received end sentinel from Redis producer")
-                break
-            wm.addEdge(edge)
+            _, first_edge = message
+            edges = [first_edge]
+
+            if drain_batch_size > 1:
+                drained = await client.lpop(redis_key, drain_batch_size - 1)
+                if drained is None:
+                    drained_edges = []
+                elif isinstance(drained, str):
+                    drained_edges = [drained]
+                else:
+                    drained_edges = drained
+                edges.extend(drained_edges)
+
+            for edge in edges:
+                if edge == end_sentinel:
+                    print("Received end sentinel from Redis producer")
+                    return
+                wm.addEdge(edge)
     finally:
         await client.aclose()
 
@@ -103,6 +117,7 @@ async def pipeline(args):
             redis_key=args.redis_key,
             end_sentinel=args.end_sentinel,
             block_timeout=args.redis_block_timeout,
+                drain_batch_size=args.redis_drain_batch_size,
         )
     )
     
@@ -136,8 +151,29 @@ async def main():
         default=1,
         help="BLPOP timeout in seconds while waiting for Redis messages",
     )
+    parser.add_argument(
+        "--redis-drain-batch-size",
+        type=int,
+        default=2000,
+        help="How many additional edges to drain per Redis read cycle",
+    )
     args = parser.parse_args()
     np.random.seed(42)
+
+    print(
+        "Main startup | "
+        f"total_runtime={args.total_runtime}s | "
+        f"redis_url={args.redis_url} | "
+        f"redis_key={args.redis_key} | "
+        f"redis_block_timeout={args.redis_block_timeout}s | "
+        f"redis_drain_batch_size={args.redis_drain_batch_size} | "
+        f"window_size={args.window_size} | "
+        f"slide={args.slide} | "
+        f"model_dir={args.model_dir}"
+    )
+
+    if args.redis_drain_batch_size <= 0:
+        raise ValueError("--redis-drain-batch-size must be greater than 0")
 
     try:
         await asyncio.wait_for(pipeline(args), timeout=args.total_runtime)
