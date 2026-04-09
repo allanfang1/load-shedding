@@ -28,6 +28,10 @@ from typing import AsyncIterator
 
 async def produce(
     filepath: str,
+    idle_rate: float = 0.001,
+    spike_start: float = 0.0,
+    spike_duration: float = 0.0,
+    spike_rate: float = 0.0,
 ) -> AsyncIterator[str]:
 
     edge_counter = 0
@@ -38,17 +42,10 @@ async def produce(
                 continue
             edge_counter += 1
             
-            await asyncio.sleep(0.001)
+            now = time.perf_counter()
+            if spike_duration != 0 and now >= spike_start and now < spike_start + spike_duration:
+                await asyncio.sleep(spike_rate)
+            else:
+                await asyncio.sleep(idle_rate)
 
             yield raw
-
-def arrival_rate(t):
-    """Returns the average edge arrival rate in edges per second."""
-    if t < 10:
-        return 200000
-    elif t < 20:
-        return 80000
-    elif t < 30:
-        return 30000
-    else:
-        return 40000
