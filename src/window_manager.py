@@ -13,7 +13,7 @@ from core.sparsifiers import modified_spectral_sparsify
 from core.moments import Moments
 
 class WindowManager:
-    def __init__(self, window_size, slide, graph, algo, base_time=0, predictor=None):
+    def __init__(self, window_size, slide, graph, algo, k = 10, base_time=0, predictor=None):
         """
         Parameters
         ----------
@@ -34,6 +34,7 @@ class WindowManager:
         self.base_time = base_time
         self.graph = graph
         self.algo = algo
+        self.k = k
 
         self.window_start = base_time
         
@@ -41,9 +42,6 @@ class WindowManager:
         self.edge_count = defaultdict(int)
         self.in_moments = Moments()
         self.out_moments = Moments()
-
-        
-        self.log_file = "timings.csv"
 
         self.ingest_queue = SimpleQueue()
 
@@ -118,15 +116,20 @@ class WindowManager:
 
         result = self.runAlgo(self.graph)
         
-        self.append_row({"window": self.window_start,
+        self.window_start = close_time - self.window_size + self.slide
+
+        return {"system_type": "shed" if self.load_shed_manager else "classic",
+                         "window": self.window_start,
+                         "window_size": self.window_size,
+                         "slide": self.slide,
+                         "incoming_edges": len(drained_edges),
                          "edge_count": full_edge_count,
                          "shed_count": shed_count if self.load_shed_manager else 0,
                          "budget": remaining_time,
+                         "end_time": time.perf_counter(),
                          "actual_runtime": time.perf_counter() - begin_use_budget,
-                         "pagerank_top10": json.dumps(result)
-                         })
-
-        self.window_start = close_time - self.window_size + self.slide
+                         f"pagerank_top{self.k}": json.dumps(result)
+                         }
       
 
     def batchAddEdges(self, edges):
@@ -137,20 +140,15 @@ class WindowManager:
                 self.graph.add_edge(s, d)
                 self.in_moments.increment_update(self.graph.in_degree(d)-1)
                 self.out_moments.increment_update(self.graph.out_degree(s)-1)
-                # print(f"Edge added: {s} -> {d}, time: {t}")
 
     def runAlgo(self, snapshot):
-        # start_time = time.perf_counter()
         result = self.algo(snapshot)
-        # end_time = time.perf_counter()
-        # elapsed = end_time - start_time
-        k = 10
 
         return sorted(
-            ((str(k), float(v)) for k, v in result.items()),
+            ((str(node), float(v)) for node, v in result.items()),
             key=lambda x: x[1],
             reverse=True
-        )[:k]
+        )[:self.k]
         
     def removeBefore(self, t):
         while self.timed_list.head and self.timed_list.head.t < t:
@@ -176,21 +174,6 @@ class WindowManager:
             del self.edge_count[(s, d)]
             return True
         return False
-
-    def append_row(self, row: dict) -> None:
-        self.log_file
-        os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
-        
-        file_exists = os.path.exists(self.log_file)
-        
-        with open(self.log_file, "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=row.keys())
-            
-            if not file_exists:
-                writer.writeheader()
-            
-            writer.writerow(row)
-            print(f"Saved row to {self.log_file}")
 
 # ======================================================================
 # Sparsifiers

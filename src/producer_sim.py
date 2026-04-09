@@ -28,24 +28,14 @@ from typing import AsyncIterator
 
 async def produce(
     filepath: str,
-    idle_rate: float = 0.001,
-    spike_start: float = 0.0,
-    spike_duration: float = 0.0,
-    spike_rate: float = 0.0,
 ) -> AsyncIterator[str]:
 
-    edge_counter = 0
     with open(filepath, "r") as fh:
         for raw in fh:
             raw = raw.strip()
             if not raw:
                 continue
-            edge_counter += 1
             
-            now = time.perf_counter()
-            if spike_duration != 0 and now >= spike_start and now < spike_start + spike_duration:
-                await asyncio.sleep(spike_rate)
-            else:
-                await asyncio.sleep(idle_rate)
+            await asyncio.sleep(0)
 
             yield raw
