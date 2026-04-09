@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 from window_manager import WindowManager
 import asyncio
-from producer_sim import produce
+from redis import asyncio as redis
 
 from modelling_s.runtime_predictor import RuntimePredictor
 
@@ -47,21 +47,32 @@ def append_row(row: dict, output_dir: str) -> None:
         writer.writerow(row)
         print(f"Saved row to {output_dir}")
 
-async def producer(queue: asyncio.Queue, args):
-    """Simulates edge arrivals and puts them in the queue."""
-    async for edge in produce(args.graph_dir):
-        await queue.put(edge)
+async def redis_consumer(
+    wm: WindowManager,
+    redis_url: str,
+    redis_key: str,
+    end_sentinel: str,
+    block_timeout: int = 1,
+):
+    """Consumes edges from a Redis list and adds them to the WindowManager."""
+    client = redis.from_url(redis_url, decode_responses=True)
+    try:
+        while True:
+            message = await client.blpop(redis_key, timeout=block_timeout)
+            if message is None:
+                await asyncio.sleep(0)
+                continue
 
-async def consumer(queue: asyncio.Queue, wm: WindowManager):
-    """Consumes edges from the queue and adds them to the WindowManager."""
-    while True:
-        edge = await queue.get()
-        if edge is None:  # Sentinel value to stop the consumer
-            break
-        wm.addEdge(edge)
+            _, edge = message
+            if edge == end_sentinel:
+                print("Received end sentinel from Redis producer")
+                break
+            wm.addEdge(edge)
+    finally:
+        await client.aclose()
 
 async def pipeline(args):
-    """Main pipeline to run the producer and consumer with the window manager."""
+    """Main pipeline that consumes edges from Redis and runs the window manager."""
     g = nx.DiGraph() # we are using a digraph
     algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
     base = time.perf_counter()
@@ -84,14 +95,18 @@ async def pipeline(args):
     window_lock = asyncio.Lock()
     trigger_task = asyncio.create_task(window_trigger(wm, args.slide, base, window_lock, args))
 
-    queue = asyncio.Queue()
-    print("start processing edges")
-    producer_task = asyncio.create_task(producer(queue, args))
-    consumer_task = asyncio.create_task(consumer(queue, wm))
+    print("start processing edges from Redis")
+    consumer_task = asyncio.create_task(
+        redis_consumer(
+            wm=wm,
+            redis_url=args.redis_url,
+            redis_key=args.redis_key,
+            end_sentinel=args.end_sentinel,
+            block_timeout=args.redis_block_timeout,
+        )
+    )
     
     try:
-        await producer_task  # wait until done
-        await queue.put(None)  # signal consumer to stop
         await consumer_task
     finally:
         trigger_task.cancel()
@@ -106,19 +121,23 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--graph-dir", type=str, default=None, help="Path to graph edge file", required=True)
     parser.add_argument("--output-dir", type=str, default="output.csv", help="Directory to save collected data or trained model")
     parser.add_argument("--k", type=int, default=15, help="Value of k for top-k metrics")
     parser.add_argument("--total-runtime", type=int, default=5000, help="Total runtime for producer in seconds")
     parser.add_argument("--window-size", type=float, default=10.0, help="Size of the sliding window in seconds")
     parser.add_argument("--slide", type=float, default=5.0, help="Slide interval for the window in seconds")
     parser.add_argument("--model-dir", type=str, default=None, help="Directory containing trained model")
+    parser.add_argument("--redis-url", type=str, default="redis://redis:6379/0", help="Redis connection URL")
+    parser.add_argument("--redis-key", type=str, default="edges", help="Redis list key for edge messages")
+    parser.add_argument("--end-sentinel", type=str, default="__END__", help="Sentinel payload used to stop Redis consumer")
+    parser.add_argument(
+        "--redis-block-timeout",
+        type=int,
+        default=1,
+        help="BLPOP timeout in seconds while waiting for Redis messages",
+    )
     args = parser.parse_args()
     np.random.seed(42)
-
-    if not os.path.isfile(args.graph_dir):
-        print(f"Graph file {args.graph_dir} does not exist.")
-        return
 
     try:
         await asyncio.wait_for(pipeline(args), timeout=args.total_runtime)

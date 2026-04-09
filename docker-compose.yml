@@ -1,0 +1,65 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: loadshedding-redis
+    restart: "no"
+    cpus: "2.0"
+    mem_limit: "512m"
+    mem_reservation: "256m"
+
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loadshedding-producer
+    depends_on:
+      - redis
+    cpus: "2.00"
+    mem_limit: "1g"
+    mem_reservation: "512m"
+    command:
+      - python
+      - producer_service.py
+      - --graph-dir
+      - /data/ldbc-sf10-updatestream_postprocess.txt
+      - --redis-url
+      - redis://redis:6379/0
+      - --redis-key
+      - edges
+      - --send-end-sentinel
+      - --max-runtime
+      - ${STACK_RUNTIME_SECONDS:-120}
+    volumes:
+      - ./data:/data:ro
+
+  main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loadshedding-main
+    depends_on:
+      - redis
+    cpus: "2.00"
+    mem_limit: "3g"
+    mem_reservation: "1g"
+    command:
+      - python
+      - main.py
+      - --redis-url
+      - redis://redis:6379/0
+      - --redis-key
+      - edges
+      - --output-dir
+      - /app/tests/results.csv
+      - --k
+      - "20"
+      - --total-runtime
+      - ${STACK_RUNTIME_SECONDS:-120}
+      - --window-size
+      - "10"
+      - --slide
+      - "5"
+      - --model-dir
+      - /app/src/models
+    volumes:
+      - ./tests:/app/tests
