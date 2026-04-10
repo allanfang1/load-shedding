@@ -103,7 +103,16 @@ async def pipeline(args):
         else:
             print(f"No trained model found at {args.model_dir} — running without load shedding")
 
-    wm = WindowManager(args.window_size, args.slide, g, algorithm, args.k, base_time=base, predictor=predictor)
+    wm = WindowManager(
+        args.window_size,
+        args.slide,
+        g,
+        algorithm,
+        args.k,
+        base_time=base,
+        predictor=predictor,
+        headroom_percent=args.headroom,
+    )
     wm.warmStart()
 
     window_lock = asyncio.Lock()
@@ -141,6 +150,12 @@ async def main():
     parser.add_argument("--total-runtime", type=int, default=5000, help="Total runtime for producer in seconds")
     parser.add_argument("--window-size", type=float, default=10.0, help="Size of the sliding window in seconds")
     parser.add_argument("--slide", type=float, default=5.0, help="Slide interval for the window in seconds")
+    parser.add_argument(
+        "--headroom",
+        type=float,
+        default=0.0,
+        help="Headroom as a percentage of slide to subtract from remaining-time budget (0-100)",
+    )
     parser.add_argument("--model-dir", type=str, default=None, help="Directory containing trained model")
     parser.add_argument("--redis-url", type=str, default="redis://redis:6379/0", help="Redis connection URL")
     parser.add_argument("--redis-key", type=str, default="edges", help="Redis list key for edge messages")
@@ -169,11 +184,14 @@ async def main():
         f"redis_drain_batch_size={args.redis_drain_batch_size} | "
         f"window_size={args.window_size} | "
         f"slide={args.slide} | "
+        f"headroom={args.headroom}% | "
         f"model_dir={args.model_dir}"
     )
 
     if args.redis_drain_batch_size <= 0:
         raise ValueError("--redis-drain-batch-size must be greater than 0")
+    if args.headroom < 0 or args.headroom > 100:
+        raise ValueError("--headroom must be in the range [0, 100]")
 
     try:
         await asyncio.wait_for(pipeline(args), timeout=args.total_runtime)

@@ -13,7 +13,7 @@ from core.sparsifiers import modified_spectral_sparsify
 from core.moments import Moments
 
 class WindowManager:
-    def __init__(self, window_size, slide, graph, algo, k = 10, base_time=0, predictor=None):
+    def __init__(self, window_size, slide, graph, algo, k = 10, base_time=0, predictor=None, headroom_percent=0.0):
         """
         Parameters
         ----------
@@ -35,6 +35,7 @@ class WindowManager:
         self.graph = graph
         self.algo = algo
         self.k = k
+        self.headroom_seconds = (headroom_percent / 100.0) * self.slide
 
         self.window_start = base_time
         
@@ -102,7 +103,7 @@ class WindowManager:
 
         full_edge_count = self.graph.number_of_edges()
 
-        remaining_time = close_time + self.slide - time.perf_counter()
+        remaining_time = close_time + self.slide - time.perf_counter() - self.headroom_seconds
 
         # LOAD SHEDDING Derive shed parameter
         shed_count = 0

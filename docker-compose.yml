@@ -67,9 +67,11 @@ services:
       - --total-runtime
       - ${STACK_RUNTIME_SECONDS:-120}
       - --window-size
-      - "10"
+      - "30"
       - --slide
-      - "5"
+      - "10"
+      - --headroom
+      - "2"
       - --model-dir
       - /app/src/models
     volumes:
