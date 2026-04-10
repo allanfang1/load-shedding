@@ -120,10 +120,11 @@ class WindowManager:
 
             result = self.runAlgo(self.graph)
         
+        old_start = self.window_start
         self.window_start = close_time - self.window_size + self.slide
 
         return {"system_type": "shed" if self.load_shed_manager else "classic",
-                         "window": self.window_start,
+                         "window": old_start,
                          "window_size": self.window_size,
                          "slide": self.slide,
                          "incoming_edges": len(drained_edges),

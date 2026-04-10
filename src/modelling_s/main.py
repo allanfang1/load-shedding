@@ -317,8 +317,8 @@ def collect_timings(
     if algo_names is None:
         algo_names = list_algorithms()
 
-    num_s_samples = 16
-    low, high = 0.1, 6
+    num_s_samples = 20
+    low, high = 0.01, 6
     done = 0
 
     for label, wm in graphs:

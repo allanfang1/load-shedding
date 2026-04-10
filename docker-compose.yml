@@ -67,9 +67,9 @@ services:
       - --total-runtime
       - ${STACK_RUNTIME_SECONDS:-120}
       - --window-size
-      - "30"
+      - "8"
       - --slide
-      - "10"
+      - "2"
       - --headroom
       - "2"
       - --model-dir
