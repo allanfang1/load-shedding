@@ -105,16 +105,19 @@ class WindowManager:
         remaining_time = close_time + self.slide - time.perf_counter()
 
         # LOAD SHEDDING Derive shed parameter
+        shed_count = 0
+        result = []
         begin_use_budget = time.perf_counter()
-        if self.load_shed_manager is not None:
-            predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
-            shed_param = float(predicted_s)
-            # print(f"Load shed parameter: {shed_param} "
-            #       f"(remaining_time={remaining_time:.4f}s, "
-            #       f"current_edges={self.graph.number_of_edges()})")
-            shed_count = self.modifiedSpectralSparsity(close_time, s=shed_param)
+        if remaining_time > 0:
+            if self.load_shed_manager is not None:
+                predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
+                shed_param = float(predicted_s)
+                # print(f"Load shed parameter: {shed_param} "
+                #       f"(remaining_time={remaining_time:.4f}s, "
+                #       f"current_edges={self.graph.number_of_edges()})")
+                shed_count = self.modifiedSpectralSparsity(close_time, s=shed_param)
 
-        result = self.runAlgo(self.graph)
+            result = self.runAlgo(self.graph)
         
         self.window_start = close_time - self.window_size + self.slide
 
@@ -124,9 +127,9 @@ class WindowManager:
                          "slide": self.slide,
                          "incoming_edges": len(drained_edges),
                          "edge_count": full_edge_count,
-                         "shed_count": shed_count if self.load_shed_manager else 0,
-                         "budget": remaining_time,
+                         "shed_count": shed_count,
                          "end_time": time.perf_counter(),
+                         "budget": remaining_time,
                          "actual_runtime": time.perf_counter() - begin_use_budget,
                          f"pagerank_top{self.k}": json.dumps(result)
                          }

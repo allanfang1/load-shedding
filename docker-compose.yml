@@ -73,4 +73,26 @@ services:
       - --model-dir
       - /app/src/models
     volumes:
+      - ./data:/data:ro
+      - ./src/models:/app/src/models
+      - ./tests:/app/tests
+
+  modelling:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loadshedding-modelling
+    profiles:
+      - modelling
+    cpus: "4.00"
+    mem_limit: "3g"
+    mem_reservation: "1g"
+    command:
+      - python
+      - -m
+      - modelling_s.main
+      - --help
+    volumes:
+      - ./data:/data:ro
+      - ./src/models:/app/src/models
       - ./tests:/app/tests

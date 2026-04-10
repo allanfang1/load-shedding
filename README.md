@@ -49,6 +49,40 @@ docker compose up --build --abort-on-container-exit --exit-code-from main
 
 Output rows are written to `tests/results.csv` (mounted from host).
 
+## Run `modelling_s` in the same container image
+
+Use the `modelling` service when you want training data collection or `run-all` under the exact same Python/runtime image as `main`.
+
+Build once:
+
+```bash
+docker compose build main modelling
+```
+
+Collect training data (example):
+
+```bash
+docker compose run --rm modelling python -m modelling_s.main collect --sample-file /data/higgs-activity_time_postprocess.txt --algo pagerank --out /app/tests/timings.csv --num-snapshots 15 --max-edges 5000
+```
+
+Run end-to-end collect + train (example):
+
+```bash
+docker compose run --rm modelling python -m modelling_s.main run-all --sample-file /data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir /app/src/models --out /app/tests/timings.csv
+```
+
+Because of mounted volumes:
+
+- input data is read from `./data` via `/data`
+- collected CSVs are persisted to `./tests`
+- trained artifacts are persisted to `./src/models`
+
+If you prefer, you can also run the same command through the `main` service image:
+
+```bash
+docker compose run --rm main python -m modelling_s.main run-all --sample-file /data/higgs-activity_time_postprocess.txt --algo pagerank --model-dir /app/src/models --out /app/tests/timings.csv
+```
+
 ## Notes
 
 - The producer sends `__END__` when done, so the Redis consumer can stop gracefully.

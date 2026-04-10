@@ -30,7 +30,9 @@ import json
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
+from typing import Iterable, Iterator
 
 import networkx as nx
 import numpy as np
@@ -76,6 +78,20 @@ def load_graph_from_edgelist(filepath: str, directed: bool = True) -> nx.Graph:
     return G
 
 
+def load_window_manager_from_edgelist(filepath: str, directed: bool = True) -> MockWindowManager:
+    """Load an edge-list directly into a ``MockWindowManager``."""
+    graph = nx.DiGraph() if directed else nx.Graph()
+    wm = MockWindowManager(graph, None)
+    with open(filepath) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) < 2:
+                continue
+            src, dst = parts[0], parts[1]
+            wm.addEdge(src, dst, t=0)
+    return wm
+
+
 def discover_graph_files(directory: str, extensions: tuple = (".txt",)) -> list[str]:
     """Return sorted list of graph files in *directory*."""
     paths = []
@@ -92,7 +108,7 @@ def sample_window_snapshots(
     num_snapshots: int = 30,
     max_edges: int = 10,
     directed: bool = True,
-) -> list[tuple[str, nx.Graph]]:
+) -> Iterator[tuple[str, MockWindowManager]]:
     """Sample sliding-window-style graph snapshots from a real edge-list file.
 
     Reads *all* edges once, then takes ``num_snapshots`` windows of varying
@@ -111,19 +127,25 @@ def sample_window_snapshots(
     directed : bool
         Whether to build directed graphs.
 
-    Returns
-    -------
-    list of (label, nx.Graph) tuples.
+    Yields
+    ------
+    (label, MockWindowManager) tuples.
     """
-    # 1. Read all edges
-    edges: list[tuple[str, str]] = []
+    # 1. Stream edges and keep only a bounded tail buffer.
+    if max_edges <= 0:
+        raise ValueError("max_edges must be > 0")
+
+    edge_tail: deque[tuple[str, str]] = deque(maxlen=max_edges)
+    total = 0
     with open(filepath) as f:
         for line in f:
             parts = line.strip().split()
-            if len(parts) >= 2 and parts[2] != "-1":
-                edges.append((parts[0], parts[1]))
+            if len(parts) >= 2:
+                if len(parts) >= 3 and parts[2] == "-1":
+                    continue
+                edge_tail.append((parts[0], parts[1]))
+                total += 1
 
-    total = len(edges)
     if total == 0:
         raise ValueError(f"No edges found in {filepath}")
 
@@ -132,28 +154,52 @@ def sample_window_snapshots(
     # 2. Pick window boundaries
     #    We want varied graph sizes — log-spaced from a small window up to
     #    max_edges (or total if smaller), so we get both tiny and large snapshots.
-    min_edges = max(10, max_edges // 200)
+    min_edges = max(1, min(10, max_edges))
     upper = min(total, max_edges)
-    import numpy as _np
     window_sizes = sorted(set(
-        int(s) for s in _np.geomspace(min_edges, upper, num=num_snapshots)
+        int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)
     ))
 
-    # 3. Build a graph for each window
-    snapshots: list[tuple[str, MockWindowManager]] = []
+    # 3. Build a graph for each sampled window from the bounded tail.
+    tail_edges = list(edge_tail)
     for ws in window_sizes:
-        # Slide the window to the middle of the stream (or end if too large)
-        start = max(0, (total - ws) // 2)
+        start = max(0, total - ws)
         G = nx.DiGraph() if directed else nx.Graph()
         wm = MockWindowManager(G, None)
-        for src, dst in edges[start : start + ws]:
-             # Assuming timestamp is not available
+        for src, dst in tail_edges[-ws:]:
             wm.addEdge(src, dst, t=0)
         label = f"{fname}_win{ws}_start{start}"
-        snapshots.append((label, wm))
         print(f"  Snapshot {label}: n={G.number_of_nodes()}, m={G.number_of_edges()}")
+        yield label, wm
 
-    return snapshots
+
+def iter_graph_window_managers(
+    graph_dir: str | None,
+    sample_file: str | None,
+    num_snapshots: int,
+    max_edges: int,
+) -> Iterator[tuple[str, MockWindowManager]]:
+    """Yield graph windows one at a time for bounded-memory collection."""
+    if graph_dir:
+        files = discover_graph_files(graph_dir)
+        if not files:
+            print(f"No graph files found in {graph_dir}")
+        for fp in files:
+            label = Path(fp).stem
+            print(f"Loading {label} ...")
+            try:
+                wm = load_window_manager_from_edgelist(fp, directed=True)
+                yield label, wm
+            except Exception as e:
+                print(f"  Skipped {fp}: {e}")
+
+    if sample_file:
+        print(f"Sampling window snapshots from {sample_file} ...")
+        yield from sample_window_snapshots(
+            sample_file,
+            num_snapshots=num_snapshots,
+            max_edges=max_edges,
+        )
 
 
 # ======================================================================
@@ -217,10 +263,10 @@ def clone_window_manager(wm: MockWindowManager) -> MockWindowManager:
 
 
 def collect_timings(
-    graphs: list[tuple[str, MockWindowManager]],
+    graphs: Iterable[tuple[str, MockWindowManager]],
     algo_names: list[str] | None = None,
     repeats: int = 3,
-) -> list[dict]:
+) -> Iterator[dict]:
     """Run every registered algorithm on every graph; return rows of data.
 
     Each row is a dict:  {**features, 'graph_label': ..., 'algorithm': ..., 'runtime': ...}
@@ -228,12 +274,10 @@ def collect_timings(
     if algo_names is None:
         algo_names = list_algorithms()
 
-    rows = []
     num_s_samples = 16
-    total = len(graphs) * num_s_samples * len(algo_names)
     low, high = 0.1, 6
     done = 0
-    progress = 0
+
     for label, wm in graphs:
         vert_count = wm.graph.number_of_nodes()
         pre_features = extract_features(wm.graph, wm.in_moments.get_mean(vert_count), wm.out_moments.get_mean(vert_count), wm.in_moments.get_variance(vert_count), wm.out_moments.get_variance(vert_count), wm.in_moments.get_skewness(vert_count), wm.out_moments.get_skewness(vert_count))
@@ -246,9 +290,8 @@ def collect_timings(
             post_features = extract_features(tmp_wm.graph, tmp_wm.in_moments.get_mean(vert_count), tmp_wm.out_moments.get_mean(vert_count), tmp_wm.in_moments.get_variance(vert_count), tmp_wm.out_moments.get_variance(vert_count), tmp_wm.in_moments.get_skewness(vert_count), tmp_wm.out_moments.get_skewness(vert_count))
             for algo_name in algo_names:
                 done += 1
-                progress += 1
                 algo_fn = get_algorithm(algo_name)
-                print(f"  [{progress}/{total} ({done})] {algo_name} on {label} with s={s_value:.2f} "
+                print(f"  [{done}] {algo_name} on {label} with s={s_value:.2f} "
                     f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
                     end=" ", flush=True)
                 try:
@@ -275,7 +318,7 @@ def collect_timings(
                     "pagerank_top10": pagerank_top10,
                     
                 }
-                rows.append(row)
+                yield row
 
             if (
                 pre_features["num_nodes"] == post_features["num_nodes"]
@@ -285,24 +328,83 @@ def collect_timings(
                     f"  -> No topology change after sparsification for {label} at s={s_value:.2f}; "
                     "skipping remaining s-values for this graph."
                 )
-                if progress % (num_s_samples * len(algo_names)) != 0:
-                    progress = ((progress // (num_s_samples * len(algo_names))) + 1) * (num_s_samples * len(algo_names))
                 break
-    return rows
 
 
-def save_timings_csv(rows: list[dict], path: str) -> None:
-    """Write collected rows to a CSV file."""
-    if not rows:
-        print("No data to save.")
-        return
+def collect_ground_truth_timings(
+    graphs: Iterable[tuple[str, MockWindowManager]],
+    algo_names: list[str] | None = None,
+) -> Iterator[dict]:
+    """Collect no-shedding runtime rows as a streaming iterator."""
+    gt_algo_names = algo_names if algo_names is not None else list_algorithms()
+    gt_progress = 0
+
+    for label, wm in graphs:
+        vert_count = wm.graph.number_of_nodes()
+        features = extract_features(
+            wm.graph,
+            wm.in_moments.get_mean(vert_count),
+            wm.out_moments.get_mean(vert_count),
+            wm.in_moments.get_variance(vert_count),
+            wm.out_moments.get_variance(vert_count),
+            wm.in_moments.get_skewness(vert_count),
+            wm.out_moments.get_skewness(vert_count),
+        )
+        for algo_name in gt_algo_names:
+            gt_progress += 1
+            algo_fn = get_algorithm(algo_name)
+            print(
+                f"  [GT {gt_progress}] {algo_name} on {label} "
+                f"(n={wm.graph.number_of_nodes()}, m={wm.graph.number_of_edges()}) ...",
+                end=" ",
+                flush=True,
+            )
+            try:
+                begin = time.perf_counter()
+                algo_result = algo_fn(wm.graph)
+                rt = time.perf_counter() - begin
+                print(f"{rt:.4f}s")
+            except Exception as e:
+                print(f"FAILED ({e})")
+                rt = float("nan")
+                algo_result = None
+
+            pagerank_top10 = ""
+            if algo_name == "pagerank":
+                pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+
+            yield {
+                **{f"pre_{k}": v for k, v in features.items()},
+                "graph_label": label,
+                "algorithm": algo_name,
+                "runtime": rt,
+                "budget": rt,
+                "pagerank_top10": pagerank_top10,
+            }
+
+
+def save_timings_csv(rows: Iterable[dict], path: str) -> int:
+    """Write collected rows to a CSV file (streaming)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fieldnames = list(rows[0].keys())
+
+    row_iter = iter(rows)
+    first_row = next(row_iter, None)
+    if first_row is None:
+        print("No data to save.")
+        return 0
+
+    fieldnames = list(first_row.keys())
+    count = 0
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
-    print(f"Saved {len(rows)} rows to {path}")
+        writer.writerow(first_row)
+        count += 1
+        for row in row_iter:
+            writer.writerow(row)
+            count += 1
+    print(f"Saved {count} rows to {path}")
+    return count
 
 
 def load_timings_csv(path: str) -> list[dict]:
@@ -354,92 +456,41 @@ def parse_feature_list(raw: str | None, available: list[str]) -> list[str]:
 
 def cmd_collect(args):
     """Collect timing data from graph files and/or synthetic graphs."""
-    graphs: list[tuple[str, nx.Graph]] = []
-
-    # Load from directory
-    if args.graph_dir:
-        files = discover_graph_files(args.graph_dir)
-        if not files:
-            print(f"No graph files found in {args.graph_dir}")
-        for fp in files:
-            label = Path(fp).stem
-            print(f"Loading {label} ...")
-            try:
-                G = load_graph_from_edgelist(fp, directed=True)
-                graphs.append((label, G))
-            except Exception as e:
-                print(f"  Skipped {fp}: {e}")
-
-    # Sample window snapshots from a real edge stream
-    if args.sample_file:
-        print(f"Sampling window snapshots from {args.sample_file} ...")
-        graphs.extend(sample_window_snapshots(
-            args.sample_file,
-            num_snapshots=args.num_snapshots,
-            max_edges=args.max_edges,
-        ))
-
-    if not graphs:
+    has_graph_dir_files = bool(args.graph_dir and discover_graph_files(args.graph_dir))
+    has_sample_source = bool(args.sample_file)
+    if not has_graph_dir_files and not has_sample_source:
         print("No graphs to process.  Use --graph-dir and/or --sample-file.")
         sys.exit(1)
 
     algo_names = [args.algo] if args.algo else None
     print(f"\nCollecting timings (repeats={args.repeats}) ...")
-    rows = collect_timings(graphs, algo_names=algo_names, repeats=args.repeats)
-    save_timings_csv(rows, args.out)
+    rows = collect_timings(
+        iter_graph_window_managers(
+            graph_dir=args.graph_dir,
+            sample_file=args.sample_file,
+            num_snapshots=args.num_snapshots,
+            max_edges=args.max_edges,
+        ),
+        algo_names=algo_names,
+        repeats=args.repeats,
+    )
+    collected_count = save_timings_csv(rows, args.out)
+    if collected_count == 0:
+        print("No timing rows collected.")
+        sys.exit(1)
 
     out_path = Path(args.out)
     gt_out = str(out_path.with_name(f"{out_path.stem}_ground_truth{out_path.suffix or '.csv'}"))
     print("\nCollecting ground-truth timings (no shedding) ...")
-    gt_rows = []
-    gt_algo_names = algo_names if algo_names is not None else list_algorithms()
-    gt_total = len(graphs) * len(gt_algo_names)
-    gt_progress = 0
-    for label, wm in graphs:
-        vert_count = wm.graph.number_of_nodes()
-        features = extract_features(
-            wm.graph,
-            wm.in_moments.get_mean(vert_count),
-            wm.out_moments.get_mean(vert_count),
-            wm.in_moments.get_variance(vert_count),
-            wm.out_moments.get_variance(vert_count),
-            wm.in_moments.get_skewness(vert_count),
-            wm.out_moments.get_skewness(vert_count),
-        )
-        for algo_name in gt_algo_names:
-            gt_progress += 1
-            algo_fn = get_algorithm(algo_name)
-            print(
-                f"  [GT {gt_progress}/{gt_total}] {algo_name} on {label} "
-                f"(n={wm.graph.number_of_nodes()}, m={wm.graph.number_of_edges()}) ...",
-                end=" ",
-                flush=True,
-            )
-            try:
-                begin = time.perf_counter()
-                algo_result = algo_fn(wm.graph)
-                rt = time.perf_counter() - begin
-                print(f"{rt:.4f}s")
-            except Exception as e:
-                print(f"FAILED ({e})")
-                rt = float("nan")
-                algo_result = None
-
-            pagerank_top10 = ""
-            if algo_name == "pagerank":
-                pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
-
-            gt_rows.append(
-                {
-                    **{f"pre_{k}": v for k, v in features.items()},
-                    "graph_label": label,
-                    "algorithm": algo_name,
-                    "runtime": rt,
-                    "budget": rt,
-                    "pagerank_top10": pagerank_top10,
-                }
-            )
-
+    gt_rows = collect_ground_truth_timings(
+        iter_graph_window_managers(
+            graph_dir=args.graph_dir,
+            sample_file=args.sample_file,
+            num_snapshots=args.num_snapshots,
+            max_edges=args.max_edges,
+        ),
+        algo_names=algo_names,
+    )
     save_timings_csv(gt_rows, gt_out)
 
 
