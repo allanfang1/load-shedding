@@ -131,46 +131,89 @@ def sample_window_snapshots(
     ------
     (label, MockWindowManager) tuples.
     """
-    # 1. Stream edges and keep only a bounded tail buffer.
     if max_edges <= 0:
         raise ValueError("max_edges must be > 0")
+    if num_snapshots <= 0:
+        raise ValueError("num_snapshots must be > 0")
 
-    edge_tail: deque[tuple[str, str]] = deque(maxlen=max_edges)
-    total = 0
-    with open(filepath) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 2:
+    def iter_valid_edges() -> Iterator[tuple[str, str]]:
+        with open(filepath) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 2:
+                    continue
                 if len(parts) >= 3 and parts[2] == "-1":
                     continue
-                edge_tail.append((parts[0], parts[1]))
-                total += 1
+                yield parts[0], parts[1]
+
+    # 1) First pass: count usable edges only.
+    total = 0
+    for _ in iter_valid_edges():
+        total += 1
 
     if total == 0:
         raise ValueError(f"No edges found in {filepath}")
 
     fname = Path(filepath).stem
 
-    # 2. Pick window boundaries
-    #    We want varied graph sizes — log-spaced from a small window up to
-    #    max_edges (or total if smaller), so we get both tiny and large snapshots.
+    # 2) Choose varied window sizes (log-spaced) and spread them over stream time.
     min_edges = max(1, min(10, max_edges))
     upper = min(total, max_edges)
-    window_sizes = sorted(set(
-        int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)
-    ))
+    window_sizes = sorted(set(int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)))
 
-    # 3. Build a graph for each sampled window from the bounded tail.
-    tail_edges = list(edge_tail)
+    # Build (window_size, end_index, position_idx) specs where end_index is
+    # 1-based in the full stream. We emit 3 different timeline positions per
+    # window size (early / middle / late) to increase same-size topology variety.
+    positions_per_size = 3
+    timeline_fracs = np.linspace(0.0, 1.0, num=positions_per_size)
+    specs: list[tuple[int, int, int]] = []
     for ws in window_sizes:
-        start = max(0, total - ws)
-        G = nx.DiGraph() if directed else nx.Graph()
-        wm = MockWindowManager(G, None)
-        for src, dst in tail_edges[-ws:]:
-            wm.addEdge(src, dst, t=0)
-        label = f"{fname}_win{ws}_start{start}"
-        print(f"  Snapshot {label}: n={G.number_of_nodes()}, m={G.number_of_edges()}")
-        yield label, wm
+        end_candidates = [
+            int(round(ws + frac * (total - ws)))
+            for frac in timeline_fracs
+        ]
+        deduped_end_indices = []
+        seen = set()
+        for end_idx in end_candidates:
+            end_idx = max(ws, min(end_idx, total))
+            if end_idx in seen:
+                continue
+            seen.add(end_idx)
+            deduped_end_indices.append(end_idx)
+        for pos_idx, end_idx in enumerate(deduped_end_indices, start=1):
+            specs.append((ws, end_idx, pos_idx))
+
+    # 3) Second pass: maintain bounded sliding buffer and emit snapshots at targets.
+    edge_buffer: deque[tuple[str, str]] = deque(maxlen=max_edges)
+    current_edge_idx = 0
+    spec_idx = 0
+
+    for src, dst in iter_valid_edges():
+        current_edge_idx += 1
+        edge_buffer.append((src, dst))
+
+        while spec_idx < len(specs):
+            ws, end_idx, pos_idx = specs[spec_idx]
+            if current_edge_idx < end_idx:
+                break
+
+            if len(edge_buffer) < ws:
+                spec_idx += 1
+                continue
+
+            G = nx.DiGraph() if directed else nx.Graph()
+            wm = MockWindowManager(G, None)
+            for e_src, e_dst in list(edge_buffer)[-ws:]:
+                wm.addEdge(e_src, e_dst, t=0)
+
+            start = max(0, end_idx - ws)
+            label = f"{fname}_win{ws}_p{pos_idx}_start{start}"
+            print(f"  Snapshot {label}: n={G.number_of_nodes()}, m={G.number_of_edges()}")
+            yield label, wm
+            spec_idx += 1
+
+        if spec_idx >= len(specs):
+            break
 
 
 def iter_graph_window_managers(
