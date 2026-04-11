@@ -25,7 +25,7 @@ class Moments:
         if vert_count == 0:
             return 0.0
         mean = self.get_mean(vert_count)
-        return (self.s2 / vert_count) - mean**2
+        return max(0, (self.s2 / vert_count) - mean**2) # for rounding errors
     
     def get_skewness(self, vert_count) -> float:
         if vert_count == 0:

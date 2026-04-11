@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections import deque
 import json
 import math
 import os
@@ -46,6 +47,7 @@ class WindowManager:
         self.out_moments = Moments()
 
         self.ingest_queue = SimpleQueue()
+        self._pending_edges = deque()
 
         self.load_shed_manager = (
             LoadShedManager(predictor, feature_builder=self.build_predictor_features)
@@ -90,11 +92,22 @@ class WindowManager:
             except Empty:
                 break
         return edges
+
+    def _pop_window_edges(self, close_time):
+        incoming_edges = []
+        while self._pending_edges and self._pending_edges[0][2] < close_time:
+            incoming_edges.append(self._pending_edges.popleft())
+        return incoming_edges
     
     def runCompleteWindow(self, close_time):
-        # add remaining edges in queue
-        drained_edges = self._drain_ingest_queue()
-        print(f"Running complete window at time {close_time - self.window_size} to {close_time} ({len(drained_edges)} buffered edges)")
+        # Drain queue into pending buffer, then pop only edges in this window.
+        self._pending_edges.extend(self._drain_ingest_queue())
+        incoming_edges = self._pop_window_edges(close_time)
+
+        print(
+            f"Running complete window at time {close_time - self.window_size} to {close_time} "
+            f"({len(incoming_edges)} incoming)"
+        )
         
         # shift window to close_time
         self.removeBefore(close_time - self.window_size)
@@ -103,8 +116,8 @@ class WindowManager:
         shed_count = 0
         begin_use_budget = time.perf_counter()
 
-        if self.load_shed_manager is not None:
-            first_new_node, incoming_edge_count = self.batchAddEdgesShed(drained_edges)
+        if self.load_shed_manager is not None: # TODO maybe add a negative check
+            first_new_node, incoming_edge_count = self.batchAddEdgesShed(incoming_edges)
             predicted_s = self.load_shed_manager.predict(
                 len(self.edge_count),
                 len(self.degree_count),
@@ -115,7 +128,7 @@ class WindowManager:
             shed_param = float(predicted_s)
             shed_count = self.modifiedSpectralSparsity(close_time, first_new_node, s=shed_param)
         else:
-            self.batchAddEdges(drained_edges)
+            self.batchAddEdges(incoming_edges)
 
         full_edge_count = self.graph.number_of_edges()
 
@@ -128,7 +141,7 @@ class WindowManager:
                          "window": old_start,
                          "window_size": self.window_size,
                          "slide": self.slide,
-                         "incoming_edges": len(drained_edges),
+                         "incoming_edges": len(incoming_edges),
                          "edge_count": full_edge_count,
                          "shed_count": shed_count,
                          "end_time": time.perf_counter(),
@@ -146,8 +159,8 @@ class WindowManager:
                 self.graph.add_edge(s, d)
                 self.degree_count[s] += 1
                 self.degree_count[d] += 1
-                self.in_moments.increment_update(self.graph.in_degree(d)-1)
-                self.out_moments.increment_update(self.graph.out_degree(s)-1)
+                self.out_moments.increment_update(self.degree_count[s]-1)
+                self.in_moments.increment_update(self.degree_count[d]-1)
     
     def batchAddEdgesShed(self, edges):
         first_new_node = None
@@ -161,8 +174,8 @@ class WindowManager:
                 count += 1
                 self.degree_count[s] += 1
                 self.degree_count[d] += 1
-                self.in_moments.increment_update(self.graph.in_degree(d)-1)
-                self.out_moments.increment_update(self.graph.out_degree(s)-1)
+                self.in_moments.increment_update(self.degree_count[d]-1)
+                self.out_moments.increment_update(self.degree_count[s]-1)
         return first_new_node, count
 
     def runAlgo(self, snapshot):
@@ -183,8 +196,8 @@ class WindowManager:
     def earlyRemoveEdge(self, s, d):
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
-            self.in_moments.decrement_update(self.graph.in_degree(d))
-            self.out_moments.decrement_update(self.graph.out_degree(s))
+            self.in_moments.decrement_update(self.degree_count[d])
+            self.out_moments.decrement_update(self.degree_count[s])
             self.degree_count[s] -= 1
             self.degree_count[d] -= 1
             if self.degree_count[s] == 0:
@@ -201,8 +214,8 @@ class WindowManager:
         self.edge_count[(s, d)] -= 1
         if self.edge_count[(s, d)] == 0:
             # print(f"Edge removed from graph: {s} -> {d}")
-            self.in_moments.decrement_update(self.graph.in_degree(d))
-            self.out_moments.decrement_update(self.graph.out_degree(s))
+            self.in_moments.decrement_update(self.degree_count[d])
+            self.out_moments.decrement_update(self.degree_count[s])
             self.degree_count[s] -= 1
             self.degree_count[d] -= 1
             self.graph.remove_edge(s, d)

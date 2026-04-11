@@ -2,6 +2,7 @@ import argparse
 import csv
 import time
 import os
+import traceback
 
 import networkx as nx
 import numpy as np
@@ -30,7 +31,12 @@ async def window_trigger(
 
         close_time = base + tick * slide  # exact boundary, not perf_counter()
         async with window_lock:
-            append_row(await asyncio.to_thread(wm.runCompleteWindow, close_time), args.output_dir)
+            try:
+                row = await asyncio.to_thread(wm.runCompleteWindow, close_time)
+                append_row(row, args.output_dir)
+            except Exception as e:
+                print(f"Window execution failed at close_time={close_time}: {e}")
+                traceback.print_exc()
         tick += 1
 
 def append_row(row: dict, output_dir: str) -> None:
