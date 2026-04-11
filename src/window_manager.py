@@ -8,7 +8,7 @@ import time
 from queue import SimpleQueue, Empty
 import networkx as nx
 from load_shed_manager import LoadShedManager
-from core.timed_linkedlist import TimedLL
+from core.timed_linkedlist import TimedLL, TimedLLNode
 from core.sparsifiers import modified_spectral_sparsify
 from core.moments import Moments
 
@@ -41,6 +41,7 @@ class WindowManager:
         
         self.timed_list = TimedLL()
         self.edge_count = defaultdict(int)
+        self.degree_count = defaultdict(int)
         self.in_moments = Moments()
         self.out_moments = Moments()
 
@@ -57,21 +58,19 @@ class WindowManager:
     def warmStart(self):
         self.runAlgo(self.graph)
 
-    def build_predictor_features(self, graph: nx.Graph, remaining_time: float, in_moments: Moments, out_moments: Moments) -> dict[str, float]:
+    def build_predictor_features(self, edge_count: int, vertex_count: int, percent_incoming: float, remaining_time: float, in_moments: Moments, out_moments: Moments) -> dict[str, float]:
         """Build model input features expected by modelling_s-trained predictor."""
-        n = graph.number_of_nodes()
-        m = graph.number_of_edges()
-        is_directed = int(graph.is_directed())
+        n = vertex_count
+        m = edge_count
 
-        return {
+        return { # TODO we got new features
             "pre_num_nodes": float(n),
             "pre_num_edges": float(m),
             "pre_log_num_nodes": float(math.log2(n)) if n > 0 else 0.0,
             "pre_log_num_edges": float(math.log2(m)) if m > 0 else 0.0,
-            "pre_is_directed": float(is_directed),
-            "budget": max(0.0, float(remaining_time)), # TODO headroom
-            "pre_avg_in": in_moments.get_mean(n),
-            "pre_avg_out": out_moments.get_mean(n),
+            "percent_incoming": percent_incoming,
+            "budget": max(0.0, float(remaining_time)),
+            "pre_avg": in_moments.get_mean(n), # avg degree is same for in and out in directed graph
             "pre_var_in": in_moments.get_variance(n),
             "pre_var_out": out_moments.get_variance (n),
             "pre_skew_in": in_moments.get_skewness(n),
@@ -96,29 +95,31 @@ class WindowManager:
         # add remaining edges in queue
         drained_edges = self._drain_ingest_queue()
         print(f"Running complete window at time {close_time - self.window_size} to {close_time} ({len(drained_edges)} buffered edges)")
-        self.batchAddEdges(drained_edges)
-
+        
         # shift window to close_time
         self.removeBefore(close_time - self.window_size)
 
+        remaining_time = close_time + self.slide - time.perf_counter() - self.headroom_seconds
+        shed_count = 0
+        begin_use_budget = time.perf_counter()
+
+        if self.load_shed_manager is not None:
+            first_new_node, incoming_edge_count = self.batchAddEdgesShed(drained_edges)
+            predicted_s = self.load_shed_manager.predict(
+                len(self.edge_count),
+                len(self.degree_count),
+                (incoming_edge_count / len(self.edge_count)) if self.edge_count else 0.0,
+                remaining_time, 
+                self.in_moments, 
+                self.out_moments)
+            shed_param = float(predicted_s)
+            shed_count = self.modifiedSpectralSparsity(close_time, first_new_node, s=shed_param)
+        else:
+            self.batchAddEdges(drained_edges)
+
         full_edge_count = self.graph.number_of_edges()
 
-        remaining_time = close_time + self.slide - time.perf_counter() - self.headroom_seconds
-
-        # LOAD SHEDDING Derive shed parameter
-        shed_count = 0
-        result = []
-        begin_use_budget = time.perf_counter()
-        if remaining_time > 0:
-            if self.load_shed_manager is not None:
-                predicted_s = self.load_shed_manager.predict(self.graph, remaining_time, self.in_moments, self.out_moments)
-                shed_param = float(predicted_s)
-                # print(f"Load shed parameter: {shed_param} "
-                #       f"(remaining_time={remaining_time:.4f}s, "
-                #       f"current_edges={self.graph.number_of_edges()})")
-                shed_count = self.modifiedSpectralSparsity(close_time, s=shed_param)
-
-            result = self.runAlgo(self.graph)
+        result = self.runAlgo(self.graph)
         
         old_start = self.window_start
         self.window_start = close_time - self.window_size + self.slide
@@ -143,8 +144,26 @@ class WindowManager:
             self.edge_count[(s, d)] += 1
             if self.edge_count[(s, d)] == 1:
                 self.graph.add_edge(s, d)
+                self.degree_count[s] += 1
+                self.degree_count[d] += 1
                 self.in_moments.increment_update(self.graph.in_degree(d)-1)
                 self.out_moments.increment_update(self.graph.out_degree(s)-1)
+    
+    def batchAddEdgesShed(self, edges):
+        first_new_node = None
+        count = 0
+        for s, d, t in edges:
+            self.timed_list.append(s, d, t)
+            if first_new_node is None:
+                first_new_node = self.timed_list.tail
+            self.edge_count[(s, d)] += 1
+            if self.edge_count[(s, d)] == 1:
+                count += 1
+                self.degree_count[s] += 1
+                self.degree_count[d] += 1
+                self.in_moments.increment_update(self.graph.in_degree(d)-1)
+                self.out_moments.increment_update(self.graph.out_degree(s)-1)
+        return first_new_node, count
 
     def runAlgo(self, snapshot):
         result = self.algo(snapshot)
@@ -161,6 +180,21 @@ class WindowManager:
             self.removeEdge(s, d)
             # print(f"Edge removed: {s} -> {d}, time: {edge_t}")
 
+    def earlyRemoveEdge(self, s, d):
+        self.edge_count[(s, d)] -= 1
+        if self.edge_count[(s, d)] == 0:
+            self.in_moments.decrement_update(self.graph.in_degree(d))
+            self.out_moments.decrement_update(self.graph.out_degree(s))
+            self.degree_count[s] -= 1
+            self.degree_count[d] -= 1
+            if self.degree_count[s] == 0:
+                del self.degree_count[s]
+            if self.degree_count[d] == 0:
+                del self.degree_count[d]
+            del self.edge_count[(s, d)]
+            return True
+        return False
+
     def removeEdge(self, s, d):
         """Decrement multiplicity of edge (s, d) and remove from graph if count reaches 0.
         Returns True if edge was removed from graph, False otherwise."""
@@ -169,13 +203,15 @@ class WindowManager:
             # print(f"Edge removed from graph: {s} -> {d}")
             self.in_moments.decrement_update(self.graph.in_degree(d))
             self.out_moments.decrement_update(self.graph.out_degree(s))
+            self.degree_count[s] -= 1
+            self.degree_count[d] -= 1
             self.graph.remove_edge(s, d)
             if self.graph.degree(s) == 0:
                 self.graph.remove_node(s)
-                # print(f"Node removed: {s}")
+                del self.degree_count[s]
             if self.graph.degree(d) == 0:
                 self.graph.remove_node(d)
-                # print(f"Node removed: {d}")
+                del self.degree_count[d]
             del self.edge_count[(s, d)]
             return True
         return False
@@ -184,7 +220,7 @@ class WindowManager:
 # Sparsifiers
 # ======================================================================
 
-    def modifiedSpectralSparsity(self, end_time, s: float):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
+    def modifiedSpectralSparsity(self, end_time, start_node: TimedLLNode, s: float):  # for a -> b, davg * s / min(degAout, degBin) where s is provided by the system manager
         """
         For each edge in the current window, compute the probability p of keeping it based on the formula:
         P(keep) = davg * s / x
@@ -193,8 +229,11 @@ class WindowManager:
         Intuition: keep all edges with degree < davg * s, hyperbolic decay proportional to 1/x"""
         edges_shed = modified_spectral_sparsify(
             timed_list=self.timed_list,
+            start_node=start_node,
             graph=self.graph,
-            remove_edge_fn=self.removeEdge,
+            davg=self.in_moments.get_mean(len(self.degree_count)),
+            remove_edge_fn=self.earlyRemoveEdge,
+            degree_count=self.degree_count,
             s=s,
             end_time=end_time,
         )

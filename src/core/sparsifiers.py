@@ -1,11 +1,16 @@
+from collections import defaultdict
 import random
 import networkx as nx
+from core.timed_linkedlist import TimedLLNode, TimedLL
 
 
 def modified_spectral_sparsify(
-    timed_list,
-    graph: nx.Graph,
+    timed_list: TimedLL,
+    start_node: TimedLLNode,
+    davg: float,
     remove_edge_fn,
+    degree_count: defaultdict,
+    graph: nx.Graph,
     s,
     end_time=None,
 ):
@@ -15,8 +20,8 @@ def modified_spectral_sparsify(
     ----------
     timed_list : TimedLL
         Edge arrivals in linked-list order.
-    graph : nx.DiGraph | nx.Graph
-        Current snapshot graph.
+    davg : float
+        Average degree of the graph.
     remove_edge_fn : Callable[[Any, Any], None]
         Callback that decrements multiplicity and removes graph edge/node when needed.
     s : float
@@ -24,19 +29,12 @@ def modified_spectral_sparsify(
     end_time : float | None
         Optional upper timestamp bound (exclusive). If None, process full list.
     """
-    if graph.number_of_nodes() > 0:
-        if graph.is_directed():
-            davg = graph.number_of_edges() / graph.number_of_nodes()
-        # else:
-        #     davg = 2 * graph.number_of_edges() / graph.number_of_nodes()
-    else:
-        davg = 0
 
-    curr = timed_list.head
+    curr = start_node
 
     removed = 0
     while curr and (end_time is None or curr.t < end_time):
-        denom = min(graph.out_degree(curr.src), graph.in_degree(curr.dst))
+        denom = min(degree_count[curr.src], degree_count[curr.dst])
         p = davg * s / denom if denom > 0 else 0
 
         temp = curr.next
@@ -44,5 +42,7 @@ def modified_spectral_sparsify(
             timed_list.remove_node(curr)
             if remove_edge_fn(curr.src, curr.dst):
                 removed += 1
+        else:
+            graph.add_edge(curr.src, curr.dst)
         curr = temp
     return removed
