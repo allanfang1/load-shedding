@@ -43,7 +43,6 @@ try:
     from modelling_s_v2.mock_window_manager import MockWindowManager
     from modelling_s_v2.feature_extraction import (
         FEATURE_NAMES,
-        extract_features,
     )
     from modelling_s_v2.runtime_predictor import RuntimePredictor
 except ModuleNotFoundError:
@@ -51,7 +50,6 @@ except ModuleNotFoundError:
     from mock_window_manager import MockWindowManager
     from feature_extraction import (
         FEATURE_NAMES,
-        extract_features,
     )
     from runtime_predictor import RuntimePredictor
 
@@ -59,6 +57,21 @@ except ModuleNotFoundError:
 # ======================================================================
 # Graph I/O helpers
 # ======================================================================
+
+# Per (snapshot, s): run this many random ingest-fraction variants.
+RANDOM_INGEST_FRACTION_SAMPLES = 12
+
+
+def build_staged_window_manager(
+    edges: list[tuple[str, str]],
+    directed: bool = True,
+) -> MockWindowManager:
+    """Create a window manager with all edges staged (not in graph yet)."""
+    graph = nx.DiGraph() if directed else nx.Graph()
+    wm = MockWindowManager(graph, None)
+    for src, dst in edges:
+        wm.stageEdge(src, dst, t=0)
+    return wm
 
 def load_graph_from_edgelist(filepath: str, directed: bool = True) -> nx.Graph:
     """Load a graph from a space-separated edge list file.
@@ -80,16 +93,15 @@ def load_graph_from_edgelist(filepath: str, directed: bool = True) -> nx.Graph:
 
 def load_window_manager_from_edgelist(filepath: str, directed: bool = True) -> MockWindowManager:
     """Load an edge-list directly into a ``MockWindowManager``."""
-    graph = nx.DiGraph() if directed else nx.Graph()
-    wm = MockWindowManager(graph, None)
+    edges: list[tuple[str, str]] = []
     with open(filepath) as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) < 2:
                 continue
             src, dst = parts[0], parts[1]
-            wm.addEdge(src, dst, t=0)
-    return wm
+            edges.append((src, dst))
+    return build_staged_window_manager(edges, directed=directed)
 
 
 def discover_graph_files(directory: str, extensions: tuple = (".txt",)) -> list[str]:
@@ -201,14 +213,12 @@ def sample_window_snapshots(
                 spec_idx += 1
                 continue
 
-            G = nx.DiGraph() if directed else nx.Graph()
-            wm = MockWindowManager(G, None)
-            for e_src, e_dst in list(edge_buffer)[-ws:]:
-                wm.addEdge(e_src, e_dst, t=0)
+            snapshot_edges = list(edge_buffer)[-ws:]
+            wm = build_staged_window_manager(snapshot_edges, directed=directed)
 
             start = max(0, end_idx - ws)
             label = f"{fname}_win{ws}_p{pos_idx}_start{start}"
-            print(f"  Snapshot {label}: n={G.number_of_nodes()}, m={G.number_of_edges()}")
+            print(f"  Snapshot {label}: n={len(wm.degree_count)}, m={len(wm.edge_count)}")
             yield label, wm
             spec_idx += 1
 
@@ -302,7 +312,35 @@ def clone_window_manager(wm: MockWindowManager) -> MockWindowManager:
         cloned.edge_count[(curr.src, curr.dst)] += 1
         curr = curr.next
 
+    for node, degree in wm.degree_count.items():
+        cloned.degree_count[node] = degree
+
     return cloned
+
+
+def build_window_state_features(
+    wm: MockWindowManager,
+    prefix: str,
+    percent_incoming: float | None = None,
+) -> dict[str, float]:
+    """Build features from WindowManager-like state, not from materialized graph."""
+    n = len(wm.degree_count)
+    m = len(wm.edge_count)
+
+    features = {
+        f"{prefix}_num_nodes": float(n),
+        f"{prefix}_num_edges": float(m),
+        f"{prefix}_log_num_nodes": float(np.log2(n)) if n > 0 else 0.0,
+        f"{prefix}_log_num_edges": float(np.log2(m)) if m > 0 else 0.0,
+        f"{prefix}_avg": wm.in_moments.get_mean(n),
+        f"{prefix}_var_in": wm.in_moments.get_variance(n),
+        f"{prefix}_var_out": wm.out_moments.get_variance(n),
+        f"{prefix}_skew_in": wm.in_moments.get_skewness(n),
+        f"{prefix}_skew_out": wm.out_moments.get_skewness(n),
+    }
+    if prefix == "pre":
+        features["percent_incoming"] = float(percent_incoming or 0.0)
+    return features
 
 
 def collect_timings(
@@ -322,54 +360,76 @@ def collect_timings(
     done = 0
 
     for label, wm in graphs:
-        vert_count = wm.graph.number_of_nodes()
-        pre_features = extract_features(wm.graph, wm.in_moments.get_mean(vert_count), wm.out_moments.get_mean(vert_count), wm.in_moments.get_variance(vert_count), wm.out_moments.get_variance(vert_count), wm.in_moments.get_skewness(vert_count), wm.out_moments.get_skewness(vert_count))
         for s_value in np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=num_s_samples))):
-            tmp_wm = clone_window_manager(wm)
-            begin_shed = time.perf_counter()
-            tmp_wm.modifiedSpectralSparsity(s_value)
-            end_shed = time.perf_counter()
-            vert_count = tmp_wm.graph.number_of_nodes()
-            post_features = extract_features(tmp_wm.graph, tmp_wm.in_moments.get_mean(vert_count), tmp_wm.out_moments.get_mean(vert_count), tmp_wm.in_moments.get_variance(vert_count), tmp_wm.out_moments.get_variance(vert_count), tmp_wm.in_moments.get_skewness(vert_count), tmp_wm.out_moments.get_skewness(vert_count))
-            for algo_name in algo_names:
-                done += 1
-                algo_fn = get_algorithm(algo_name)
-                print(f"  [{done}] {algo_name} on {label} with s={s_value:.2f} "
-                    f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
-                    end=" ", flush=True)
-                try:
-                    rt, algo_result = time_algorithm(algo_fn, tmp_wm.graph, repeats=repeats)
-                    print(f"{rt:.4f}s")
-                except Exception as e:
-                    print(f"FAILED ({e})")
-                    rt = float("nan")
-                    algo_result = None
+            ingest_fractions = np.sort(np.random.uniform(0.0, 1.0, size=RANDOM_INGEST_FRACTION_SAMPLES).tolist())
 
-                pagerank_top10 = ""
-                if algo_name == "pagerank":
-                    pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+            any_topology_change = False
+            for sample_idx, ingest_fraction in enumerate(ingest_fractions):
+                tmp_wm = clone_window_manager(wm)
 
-                row = {
-                    **{f"pre_{k}": v for k, v in pre_features.items()},
-                    **{f"post_{k}": v for k, v in post_features.items()},
-                    "graph_label": label,
-                    "s_value": s_value,
-                    "algorithm": algo_name,
-                    "runtime": rt,
-                    "shed_time": end_shed - begin_shed,
-                    "budget": rt + (end_shed - begin_shed),
-                    "pagerank_top10": pagerank_top10,
-                    
-                }
-                yield row
+                total_staged = tmp_wm.timed_list.size
+                ingest_count = int(round(float(ingest_fraction) * total_staged))
+                ingest_count = max(0, min(ingest_count, total_staged))
+                first_pending_node = tmp_wm.materialize_prefix(ingest_count)
 
-            if (
-                pre_features["num_nodes"] == post_features["num_nodes"]
-                and pre_features["num_edges"] == post_features["num_edges"]
-            ):
+                percent_incoming = (
+                    ((total_staged - ingest_count) / total_staged) if total_staged > 0 else 0.0
+                )
+
+                pre_features = build_window_state_features(
+                    tmp_wm,
+                    prefix="pre",
+                    percent_incoming=percent_incoming,
+                )
+
+                begin_shed = time.perf_counter()
+                tmp_wm.modifiedSpectralSparsity(s_value, start_node=first_pending_node)
+                end_shed = time.perf_counter()
+                post_features = build_window_state_features(tmp_wm, prefix="post")
+
+                topology_changed = (
+                    pre_features["pre_num_nodes"] != post_features["post_num_nodes"]
+                    or pre_features["pre_num_edges"] != post_features["post_num_edges"]
+                )
+                any_topology_change = any_topology_change or topology_changed
+
+                for algo_name in algo_names:
+                    done += 1
+                    algo_fn = get_algorithm(algo_name)
+                    print(f"  [{done}] {algo_name} on {label} with s={s_value:.2f}, ingest={ingest_fraction:.3f} "
+                        f"(n={tmp_wm.graph.number_of_nodes()}, m={tmp_wm.graph.number_of_edges()}) ...",
+                        end=" ", flush=True)
+                    try:
+                        rt, algo_result = time_algorithm(algo_fn, tmp_wm.graph, repeats=repeats)
+                        print(f"{rt:.4f}s")
+                    except Exception as e:
+                        print(f"FAILED ({e})")
+                        rt = float("nan")
+                        algo_result = None
+
+                    pagerank_top10 = ""
+                    if algo_name == "pagerank":
+                        pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+
+                    row = {
+                        **pre_features,
+                        **post_features,
+                        "graph_label": label,
+                        "s_value": s_value,
+                        "ingest_fraction": float(ingest_fraction),
+                        "algorithm": algo_name,
+                        "runtime": rt,
+                        "shed_time": end_shed - begin_shed,
+                        "budget": max(0.0, rt + (end_shed - begin_shed)),
+                        "pagerank_top10": pagerank_top10,
+
+                    }
+                    yield row
+
+            if not any_topology_change:
                 print(
-                    f"  -> No topology change after sparsification for {label} at s={s_value:.2f}; "
-                    "skipping remaining s-values for this graph."
+                    f"  -> No topology change after sparsification for {label} at s={s_value:.2f} "
+                    "across ingest-fraction samples; skipping remaining s-values for this graph."
                 )
                 break
 
@@ -383,28 +443,26 @@ def collect_ground_truth_timings(
     gt_progress = 0
 
     for label, wm in graphs:
-        vert_count = wm.graph.number_of_nodes()
-        features = extract_features(
-            wm.graph,
-            wm.in_moments.get_mean(vert_count),
-            wm.out_moments.get_mean(vert_count),
-            wm.in_moments.get_variance(vert_count),
-            wm.out_moments.get_variance(vert_count),
-            wm.in_moments.get_skewness(vert_count),
-            wm.out_moments.get_skewness(vert_count),
+        wm_full = clone_window_manager(wm)
+        wm_full.materialize_prefix(wm_full.timed_list.size)
+
+        features = build_window_state_features(
+            wm_full,
+            prefix="pre",
+            percent_incoming=0.0,
         )
         for algo_name in gt_algo_names:
             gt_progress += 1
             algo_fn = get_algorithm(algo_name)
             print(
                 f"  [GT {gt_progress}] {algo_name} on {label} "
-                f"(n={wm.graph.number_of_nodes()}, m={wm.graph.number_of_edges()}) ...",
+                f"(n={wm_full.graph.number_of_nodes()}, m={wm_full.graph.number_of_edges()}) ...",
                 end=" ",
                 flush=True,
             )
             try:
                 begin = time.perf_counter()
-                algo_result = algo_fn(wm.graph)
+                algo_result = algo_fn(wm_full.graph)
                 rt = time.perf_counter() - begin
                 print(f"{rt:.4f}s")
             except Exception as e:
@@ -417,11 +475,11 @@ def collect_ground_truth_timings(
                 pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
 
             yield {
-                **{f"pre_{k}": v for k, v in features.items()},
+                **features,
                 "graph_label": label,
                 "algorithm": algo_name,
                 "runtime": rt,
-                "budget": rt,
+                "budget": max(0.0, rt),
                 "pagerank_top10": pagerank_top10,
             }
 
