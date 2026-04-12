@@ -71,9 +71,9 @@ services:
       - --slide
       - "2"
       - --headroom
-      - "2"
-      - --model-dir
-      - /app/src/models
+      - "5"
+      # - --model-dir
+      # - /app/src/models
     volumes:
       - ./data:/data:ro
       - ./src/models:/app/src/models
@@ -92,7 +92,7 @@ services:
     command:
       - python
       - -m
-      - modelling_s.main
+      - modelling_s_v2.main
       - --help
     volumes:
       - ./data:/data:ro

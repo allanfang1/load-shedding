@@ -58,6 +58,7 @@ async def redis_consumer(
     redis_url: str,
     redis_key: str,
     end_sentinel: str,
+    first_edge_event: asyncio.Event | None = None,
     block_timeout: int = 1,
     drain_batch_size: int = 2000,
 ):
@@ -88,6 +89,9 @@ async def redis_consumer(
                     print("Received end sentinel from Redis producer")
                     return
                 wm.addEdge(edge)
+                if first_edge_event is not None and not first_edge_event.is_set():
+                    first_edge_event.set()
+                    print("First edge consumed from Redis; enabling window trigger")
     finally:
         await client.aclose()
 
@@ -95,7 +99,6 @@ async def pipeline(args):
     """Main pipeline that consumes edges from Redis and runs the window manager."""
     g = nx.DiGraph() # we are using a digraph
     algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
-    base = time.perf_counter()
 
     # Load trained predictor for load shedding (if available)
     predictor = None
@@ -115,14 +118,15 @@ async def pipeline(args):
         g,
         algorithm,
         args.k,
-        base_time=base,
+        base_time=0.0,
         predictor=predictor,
         headroom_percent=args.headroom,
     )
     wm.warmStart()
 
     window_lock = asyncio.Lock()
-    trigger_task = asyncio.create_task(window_trigger(wm, args.slide, base, window_lock, args))
+    first_edge_event = asyncio.Event()
+    trigger_task = None
 
     print("start processing edges from Redis")
     consumer_task = asyncio.create_task(
@@ -131,19 +135,35 @@ async def pipeline(args):
             redis_url=args.redis_url,
             redis_key=args.redis_key,
             end_sentinel=args.end_sentinel,
+            first_edge_event=first_edge_event,
             block_timeout=args.redis_block_timeout,
-                drain_batch_size=args.redis_drain_batch_size,
+            drain_batch_size=args.redis_drain_batch_size,
         )
     )
+
+    first_edge_wait_task = asyncio.create_task(first_edge_event.wait())
     
     try:
+        done, _ = await asyncio.wait(
+            {consumer_task, first_edge_wait_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if first_edge_wait_task in done and first_edge_event.is_set():
+            trigger_base = time.perf_counter()
+            wm.base_time = trigger_base
+            wm.window_start = trigger_base
+            trigger_task = asyncio.create_task(window_trigger(wm, args.slide, trigger_base, window_lock, args))
+
         await consumer_task
     finally:
-        trigger_task.cancel()
-        try:
-            await trigger_task
-        except asyncio.CancelledError:
-            pass
+        first_edge_wait_task.cancel()
+        if trigger_task is not None:
+            trigger_task.cancel()
+            try:
+                await trigger_task
+            except asyncio.CancelledError:
+                pass
 
 async def main():
     parser = argparse.ArgumentParser(
