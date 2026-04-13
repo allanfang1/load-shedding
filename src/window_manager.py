@@ -95,11 +95,9 @@ class WindowManager:
 
     def _pop_window_edges(self, close_time):
         incoming_edges = []
-        max_incoming_edges = 80000
         while self._pending_edges and self._pending_edges[0][2] < close_time:
             edge = self._pending_edges.popleft()
-            if len(incoming_edges) < max_incoming_edges:
-                incoming_edges.append(edge)
+            incoming_edges.append(edge)
         return incoming_edges
     
     def runCompleteWindow(self, close_time):

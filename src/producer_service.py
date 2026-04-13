@@ -4,6 +4,10 @@ import time
 import redis
 
 
+MAX_QUEUE_SIZE = 500000
+QUEUE_POLL_INTERVAL_SECONDS = 0.05
+
+
 def flush_batch(client: redis.Redis, redis_key: str, batch: list[str]) -> int:
     if not batch:
         return 0
@@ -11,6 +15,11 @@ def flush_batch(client: redis.Redis, redis_key: str, batch: list[str]) -> int:
     sent_now = len(batch)
     batch.clear()
     return sent_now
+
+
+def wait_for_queue_capacity(client: redis.Redis, redis_key: str) -> None:
+    while client.llen(redis_key) >= MAX_QUEUE_SIZE:
+        time.sleep(QUEUE_POLL_INTERVAL_SECONDS)
 
 
 def run_producer(args):
@@ -48,17 +57,20 @@ def run_producer(args):
 
                 batch.append(edge)
                 if len(batch) >= args.redis_batch_size:
+                    wait_for_queue_capacity(client, args.redis_key)
                     sent += flush_batch(client, args.redis_key, batch)
                     while sent >= next_report:
                         print(f"Published {next_report} edges")
                         next_report += 50000
 
+        wait_for_queue_capacity(client, args.redis_key)
         sent += flush_batch(client, args.redis_key, batch)
         while sent >= next_report:
             print(f"Published {next_report} edges")
             next_report += 50000
 
         if args.send_end_sentinel:
+            wait_for_queue_capacity(client, args.redis_key)
             client.rpush(args.redis_key, args.end_sentinel)
             print("Published end sentinel")
 

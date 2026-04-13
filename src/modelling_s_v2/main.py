@@ -168,21 +168,24 @@ def sample_window_snapshots(
 
     fname = Path(filepath).stem
 
-    # 2) Choose varied window sizes (log-spaced) and spread them over stream time.
-    min_edges = max(1, min(10, max_edges))
+    # 2) Choose varied window sizes (log-spaced) and anchor positions near stream start.
+    min_edges = 100000
     upper = min(total, max_edges)
-    window_sizes = sorted(set(int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)))
+    window_sizes = sorted(set(int(s) for s in np.linspace(min_edges, upper, num=num_snapshots)))
+    # window_sizes = sorted(set(int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)))
+
 
     # Build (window_size, end_index, position_idx) specs where end_index is
-    # 1-based in the full stream. We emit 3 different timeline positions per
-    # window size (early / middle / late) to increase same-size topology variety.
+    # 1-based in the full stream. For each window size, emit up to 3 contiguous
+    # windows from the beginning of the stream:
+    #   [1..ws], [ws+1..2ws], [2ws+1..3ws]
+    # (clamped by stream length).
     positions_per_size = 3
-    timeline_fracs = np.linspace(0.0, 1.0, num=positions_per_size)
     specs: list[tuple[int, int, int]] = []
     for ws in window_sizes:
         end_candidates = [
-            int(round(ws + frac * (total - ws)))
-            for frac in timeline_fracs
+            min(ws * pos_idx, total)
+            for pos_idx in range(1, positions_per_size + 1)
         ]
         deduped_end_indices = []
         seen = set()
@@ -355,7 +358,7 @@ def collect_timings(
     if algo_names is None:
         algo_names = list_algorithms()
 
-    num_s_samples = 20
+    num_s_samples = 16
     low, high = 0.01, 6
     done = 0
 
@@ -563,6 +566,9 @@ def cmd_collect(args):
         print("No graphs to process.  Use --graph-dir and/or --sample-file.")
         sys.exit(1)
 
+    out_path_str = args.out or os.path.join("models", "timings.csv")
+    args.out = out_path_str
+
     algo_names = [args.algo] if args.algo else None
     print(f"\nCollecting timings (repeats={args.repeats}) ...")
     rows = collect_timings(
@@ -597,13 +603,15 @@ def cmd_collect(args):
 
 def cmd_train(args):
     """Train an ML model from a collected CSV."""
-    rows = load_timings_csv(args.csv)
+    csv_path = args.csv or os.path.join(args.model_dir, "timings2.csv")
+
+    rows = load_timings_csv(csv_path)
 
     # Filter to the requested algorithm
     if args.algo:
         rows = [r for r in rows if r["algorithm"] == args.algo]
     if not rows:
-        print(f"No data for algorithm '{args.algo}' in {args.csv}")
+        print(f"No data for algorithm '{args.algo}' in {csv_path}")
         sys.exit(1)
 
     target_name = "s_value"
@@ -719,12 +727,12 @@ def build_parser() -> argparse.ArgumentParser:
                                 f"Choices: {list_algorithms()}")
     p_collect.add_argument("--repeats", type=int, default=1,
                            help="Timing repetitions per (graph, algo) pair")
-    p_collect.add_argument("--out", type=str, default="timings.csv",
+    p_collect.add_argument("--out", type=str, default=None,
                            help="Output CSV path")
 
     # -- train ---------------------------------------------------------
     p_train = sub.add_parser("train", help="Train an ML model from collected CSV")
-    p_train.add_argument("--csv", type=str, required=True, help="Timing CSV file")
+    p_train.add_argument("--csv", type=str, help="Timing CSV file")
     p_train.add_argument("--algo", type=str, required=True,
                          help="Algorithm name to train a model for")
     p_train.add_argument("--features", type=str, default=None,
