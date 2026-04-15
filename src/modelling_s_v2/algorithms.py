@@ -43,6 +43,9 @@ def clustering_coefficient(G: nx.Graph) -> dict:
     """Compute the clustering coefficient for each node."""
     return nx.clustering(G)
 
+def triangles(G: nx.DiGraph) -> dict:
+    """Compute the number of triangles for each node."""
+    return nx.triangles(G.to_undirected())
 
 # ---------------------------------------------------------------------------
 # Registry  -  edit this dict to enable / disable algorithms
@@ -52,6 +55,7 @@ ALGORITHM_REGISTRY: dict[str, callable] = {
     "betweenness_centrality": betweenness_centrality,
     "approx_betweenness_centrality": approx_betweenness_centrality,
     "pagerank": pagerank,
+    "triangles": triangles,
     # Uncomment to enable:
     # "closeness_centrality": closeness_centrality,
     # "clustering_coefficient": clustering_coefficient,

@@ -169,7 +169,7 @@ def sample_window_snapshots(
     fname = Path(filepath).stem
 
     # 2) Choose varied window sizes (log-spaced) and anchor positions near stream start.
-    min_edges = 100000
+    min_edges = 300000
     upper = min(total, max_edges)
     window_sizes = sorted(set(int(s) for s in np.linspace(min_edges, upper, num=num_snapshots)))
     # window_sizes = sorted(set(int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)))
@@ -346,6 +346,43 @@ def build_window_state_features(
     return features
 
 
+def sample_s_values_for_window(
+    total_edges: int,
+    low: float = 0.001,
+    high: float = 6.0,
+    min_samples: int = 10,
+    max_samples: int = 28,
+) -> np.ndarray:
+    """Sample ``s_value`` on a log scale with more points for larger windows."""
+    if total_edges <= 0:
+        return np.array([1.0])
+
+    edge_scale = np.log10(max(10, total_edges))
+    sample_count = int(np.clip(round(min_samples + 4 * (edge_scale - 1.0)), min_samples, max_samples))
+    return np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=sample_count)))
+
+
+def sample_ingest_fractions_for_window(
+    total_edges: int,
+    num_samples: int = RANDOM_INGEST_FRACTION_SAMPLES,
+) -> np.ndarray:
+    """Sample ingest fractions with uniform random draws.
+
+    Larger graphs get more random samples (higher granularity), while small
+    graphs stay close to the baseline sample count.
+    """
+    if total_edges <= 0:
+        return np.array([0.0])
+
+    edge_scale = np.log10(max(10, total_edges))
+    extra_samples = max(0, int(round(4 * (edge_scale - 3.0))))
+    sample_count = int(np.clip(num_samples + extra_samples, num_samples, num_samples * 3))
+
+    random_fracs = np.random.uniform(0.0, 1.0, size=sample_count)
+    combined = np.concatenate([np.array([0.0, 1.0]), random_fracs])
+    return np.sort(np.unique(np.round(combined, 6)))
+
+
 def collect_timings(
     graphs: Iterable[tuple[str, MockWindowManager]],
     algo_names: list[str] | None = None,
@@ -358,13 +395,17 @@ def collect_timings(
     if algo_names is None:
         algo_names = list_algorithms()
 
-    num_s_samples = 16
-    low, high = 0.01, 6
     done = 0
 
     for label, wm in graphs:
-        for s_value in np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=num_s_samples))):
-            ingest_fractions = np.sort(np.random.uniform(0.0, 1.0, size=RANDOM_INGEST_FRACTION_SAMPLES).tolist())
+        total_staged_edges = wm.timed_list.size
+        s_values = sample_s_values_for_window(total_staged_edges)
+
+        for s_value in s_values:
+            ingest_fractions = sample_ingest_fractions_for_window(
+                total_staged_edges,
+                num_samples=RANDOM_INGEST_FRACTION_SAMPLES,
+            )
 
             any_topology_change = False
             for sample_idx, ingest_fraction in enumerate(ingest_fractions):
@@ -603,7 +644,7 @@ def cmd_collect(args):
 
 def cmd_train(args):
     """Train an ML model from a collected CSV."""
-    csv_path = args.csv or os.path.join(args.model_dir, "timings2.csv")
+    csv_path = args.csv or os.path.join(args.model_dir, "timings.csv")
 
     rows = load_timings_csv(csv_path)
 

@@ -32,13 +32,10 @@ class WindowManager:
             raise ValueError("slide should be less than or equal to window_size")
         self.window_size = window_size
         self.slide = slide
-        self.base_time = base_time
         self.graph = graph
         self.algo = algo
         self.k = k
         self.headroom_seconds = (headroom_percent / 100.0) * self.slide
-
-        self.window_start = base_time
         
         self.timed_list = TimedLL()
         self.edge_count = defaultdict(int)
@@ -134,12 +131,9 @@ class WindowManager:
         full_edge_count = self.graph.number_of_edges()
 
         result = self.runAlgo(self.graph)
-        
-        old_start = self.window_start
-        self.window_start = close_time - self.window_size + self.slide
 
         return {"system_type": "shed" if self.load_shed_manager else "classic",
-                         "window": old_start,
+                         "window": close_time - self.window_size,
                          "window_size": self.window_size,
                          "slide": self.slide,
                          "incoming_edges": len(incoming_edges),
