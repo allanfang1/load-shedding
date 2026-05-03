@@ -47,6 +47,10 @@ def triangles(G: nx.DiGraph) -> dict:
     """Compute the number of triangles for each node."""
     return nx.triangles(G.to_undirected())
 
+def scc(G: nx.DiGraph) -> list[set]:
+    """Compute strongly connected components."""
+    return list(nx.strongly_connected_components(G))
+
 # ---------------------------------------------------------------------------
 # Registry  -  edit this dict to enable / disable algorithms
 # ---------------------------------------------------------------------------
@@ -56,6 +60,7 @@ ALGORITHM_REGISTRY: dict[str, callable] = {
     "approx_betweenness_centrality": approx_betweenness_centrality,
     "pagerank": pagerank,
     "triangles": triangles,
+    "scc": scc,
     # Uncomment to enable:
     # "closeness_centrality": closeness_centrality,
     # "clustering_coefficient": clustering_coefficient,

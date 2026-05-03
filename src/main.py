@@ -98,7 +98,7 @@ async def redis_consumer(
 async def pipeline(args):
     """Main pipeline that consumes edges from Redis and runs the window manager."""
     g = nx.DiGraph() # we are using a digraph
-    algorithm = nx.pagerank # nx.betweenness_centrality # nx.k_core
+    algorithm = nx.strongly_connected_components # nx.triangles # nx.pagerank # nx.betweenness_centrality # nx.k_core
 
     # Load trained predictor for load shedding (if available)
     predictor = None

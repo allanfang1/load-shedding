@@ -59,7 +59,7 @@ except ModuleNotFoundError:
 # ======================================================================
 
 # Per (snapshot, s): run this many random ingest-fraction variants.
-RANDOM_INGEST_FRACTION_SAMPLES = 12
+RANDOM_INGEST_FRACTION_SAMPLES = 6
 
 
 def build_staged_window_manager(
@@ -169,7 +169,7 @@ def sample_window_snapshots(
     fname = Path(filepath).stem
 
     # 2) Choose varied window sizes (log-spaced) and anchor positions near stream start.
-    min_edges = 300000
+    min_edges = 310000
     upper = min(total, max_edges)
     window_sizes = sorted(set(int(s) for s in np.linspace(min_edges, upper, num=num_snapshots)))
     # window_sizes = sorted(set(int(s) for s in np.geomspace(min_edges, upper, num=num_snapshots)))
@@ -180,7 +180,7 @@ def sample_window_snapshots(
     # windows from the beginning of the stream:
     #   [1..ws], [ws+1..2ws], [2ws+1..3ws]
     # (clamped by stream length).
-    positions_per_size = 3
+    positions_per_size = 1
     specs: list[tuple[int, int, int]] = []
     for ws in window_sizes:
         end_candidates = [
@@ -282,20 +282,16 @@ def time_algorithm(algo_fn, G: nx.Graph, repeats: int = 3) -> tuple[float, objec
     return float(np.median(times)), first_result
 
 
-def top_k_from_mapping(result: object, k: int = 5) -> list[tuple[str, float]]:
-    """Extract top-k (key, value) pairs from a mapping-like algorithm result."""
-    if not isinstance(result, dict):
-        return []
-
-    scored_items: list[tuple[str, float]] = []
-    for key, value in result.items():
-        try:
-            scored_items.append((str(key), float(value)))
-        except (TypeError, ValueError):
-            continue
-
-    scored_items.sort(key=lambda x: x[1], reverse=True)
-    return scored_items[:k]
+def summarize_algorithm_result(result: list[set]) -> dict:
+    """Summarize SCC output from ``nx.strongly_connected_components``."""
+    sizes = sorted((len(comp) for comp in result), reverse=True)
+    total_nodes = sum(sizes)
+    largest = sizes[0] if sizes else 0
+    return {
+        "largest_scc_ratio": (largest / total_nodes) if total_nodes > 0 else 0.0,
+        "num_scc": len(sizes),
+        "top_5_scc_sizes": sizes[:5],
+    }
 
 
 def clone_window_manager(wm: MockWindowManager) -> MockWindowManager:
@@ -348,18 +344,19 @@ def build_window_state_features(
 
 def sample_s_values_for_window(
     total_edges: int,
-    low: float = 0.001,
-    high: float = 6.0,
-    min_samples: int = 10,
-    max_samples: int = 28,
+    low: float = 0.005,
+    high: float = 6,
+    min_samples: int = 8,
+    max_samples: int = 10,
 ) -> np.ndarray:
     """Sample ``s_value`` on a log scale with more points for larger windows."""
+    return np.array([50.0])
     if total_edges <= 0:
         return np.array([1.0])
 
     edge_scale = np.log10(max(10, total_edges))
     sample_count = int(np.clip(round(min_samples + 4 * (edge_scale - 1.0)), min_samples, max_samples))
-    return np.sort(np.exp(np.random.uniform(np.log(low), np.log(high), size=sample_count)))
+    return np.sort(np.append(np.exp(np.random.uniform(np.log(low), np.log(high), size=sample_count)), 0.0))
 
 
 def sample_ingest_fractions_for_window(
@@ -376,7 +373,7 @@ def sample_ingest_fractions_for_window(
 
     edge_scale = np.log10(max(10, total_edges))
     extra_samples = max(0, int(round(4 * (edge_scale - 3.0))))
-    sample_count = int(np.clip(num_samples + extra_samples, num_samples, num_samples * 3))
+    sample_count = int(np.clip(num_samples + extra_samples, num_samples, 10))
 
     random_fracs = np.random.uniform(0.0, 1.0, size=sample_count)
     combined = np.concatenate([np.array([0.0, 1.0]), random_fracs])
@@ -451,9 +448,7 @@ def collect_timings(
                         rt = float("nan")
                         algo_result = None
 
-                    pagerank_top10 = ""
-                    if algo_name == "pagerank":
-                        pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+                    result_top10 = json.dumps(summarize_algorithm_result(algo_result))
 
                     row = {
                         **pre_features,
@@ -465,7 +460,7 @@ def collect_timings(
                         "runtime": rt,
                         "shed_time": end_shed - begin_shed,
                         "budget": max(0.0, rt + (end_shed - begin_shed)),
-                        "pagerank_top10": pagerank_top10,
+                        "pagerank_top10": result_top10,
 
                     }
                     yield row
@@ -514,9 +509,7 @@ def collect_ground_truth_timings(
                 rt = float("nan")
                 algo_result = None
 
-            pagerank_top10 = ""
-            if algo_name == "pagerank":
-                pagerank_top10 = json.dumps(top_k_from_mapping(algo_result, k=10))
+            result_top10 = json.dumps(summarize_algorithm_result(algo_result))
 
             yield {
                 **features,
@@ -524,7 +517,7 @@ def collect_ground_truth_timings(
                 "algorithm": algo_name,
                 "runtime": rt,
                 "budget": max(0.0, rt),
-                "pagerank_top10": pagerank_top10,
+                "pagerank_top10": result_top10,
             }
 
 
@@ -607,7 +600,7 @@ def cmd_collect(args):
         print("No graphs to process.  Use --graph-dir and/or --sample-file.")
         sys.exit(1)
 
-    out_path_str = args.out or os.path.join("models", "timings.csv")
+    out_path_str = args.out or os.path.join("models", "timings5.csv")
     args.out = out_path_str
 
     algo_names = [args.algo] if args.algo else None
@@ -644,7 +637,7 @@ def cmd_collect(args):
 
 def cmd_train(args):
     """Train an ML model from a collected CSV."""
-    csv_path = args.csv or os.path.join(args.model_dir, "timings.csv")
+    csv_path = args.csv or os.path.join(args.model_dir, "timings_merged.csv")
 
     rows = load_timings_csv(csv_path)
 

@@ -50,6 +50,7 @@ class WindowManager:
             LoadShedManager(predictor, feature_builder=self.build_predictor_features)
             if predictor else None
         )
+        self.missed_deadline = False
 
         random.seed(42)
         self.start_time_system = time.perf_counter()
@@ -114,13 +115,14 @@ class WindowManager:
         shed_count = 0
         begin_use_budget = time.perf_counter()
 
-        if self.load_shed_manager is not None: # TODO maybe add a negative check
+        expected_load = len(incoming_edges) + self.graph.number_of_edges()
+        if expected_load > 580000 and self.missed_deadline and self.load_shed_manager is not None: # TODO maybe add a negative check
             first_new_node, incoming_edge_count = self.batchAddEdgesShed(incoming_edges)
             predicted_s = self.load_shed_manager.predict(
                 len(self.edge_count),
                 len(self.degree_count),
                 (incoming_edge_count / len(self.edge_count)) if self.edge_count else 0.0,
-                remaining_time, 
+                max(remaining_time, 0), 
                 self.in_moments, 
                 self.out_moments)
             shed_param = float(predicted_s)
@@ -131,6 +133,8 @@ class WindowManager:
         full_edge_count = self.graph.number_of_edges()
 
         result = self.runAlgo(self.graph)
+        actual_runtime =  time.perf_counter() - begin_use_budget
+        self.missed_deadline = actual_runtime > remaining_time
 
         return {"system_type": "shed" if self.load_shed_manager else "classic",
                          "window": close_time - self.window_size,
@@ -141,7 +145,7 @@ class WindowManager:
                          "shed_count": shed_count,
                          "end_time": time.perf_counter(),
                          "budget": remaining_time,
-                         "actual_runtime": time.perf_counter() - begin_use_budget,
+                         "actual_runtime": actual_runtime,
                          f"pagerank_top{self.k}": json.dumps(result)
                          }
       
@@ -174,14 +178,15 @@ class WindowManager:
         return first_new_node, count
 
     def runAlgo(self, snapshot):
-        result = self.algo(snapshot)
-
-        return sorted(
-            ((str(node), float(v)) for node, v in result.items()),
-            key=lambda x: x[1],
-            reverse=True
-        )[:self.k]
-        
+        sccs = list(self.algo(snapshot))
+        sizes = sorted((len(comp) for comp in sccs), reverse=True)
+        n = snapshot.number_of_nodes()
+        return {
+            "largest_scc_ratio": (sizes[0] / n) if n > 0 and sizes else 0.0,
+            "num_scc": len(sccs),
+            "top_5_scc_sizes": sizes[:5],
+        }
+            
     def removeBefore(self, t):
         while self.timed_list.head and self.timed_list.head.t < t:
             s, d, edge_t = self.timed_list.popleft()

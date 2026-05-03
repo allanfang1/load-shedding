@@ -63,17 +63,17 @@ services:
       - --output-dir
       - /app/tests/results.csv
       - --k
-      - "100"
+      - "1000"
       - --total-runtime
       - ${STACK_RUNTIME_SECONDS:-120}
       - --window-size
-      - "60"
+      - "40"
       - --slide
-      - "20"
+      - "8"
       - --headroom
-      - "10"
-      # - --model-dir
-      # - /app/src/models
+      - "0"
+      - --model-dir
+      - /app/src/models
     volumes:
       - ./data:/data:ro
       - ./src/models:/app/src/models

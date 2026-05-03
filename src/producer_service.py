@@ -7,6 +7,20 @@ import redis
 MAX_QUEUE_SIZE = 500000
 QUEUE_POLL_INTERVAL_SECONDS = 0.05
 
+# Hard-coded producer batch sizing profile.
+# Start in REST_BATCH_SIZE, switch to SPIKE_BATCH_SIZE after SPIKE_START_SECONDS,
+# then switch back to REST_BATCH_SIZE after SPIKE_END_SECONDS.
+REST_BATCH_SIZE = 45
+SPIKE_BATCH_SIZE = 190
+SPIKE_START_SECONDS = 50
+SPIKE_END_SECONDS = 80
+
+
+def get_target_batch_size(elapsed_seconds: float) -> int:
+    if SPIKE_START_SECONDS <= elapsed_seconds < SPIKE_END_SECONDS:
+        return SPIKE_BATCH_SIZE
+    return REST_BATCH_SIZE
+
 
 def flush_batch(client: redis.Redis, redis_key: str, batch: list[str]) -> int:
     if not batch:
@@ -28,6 +42,7 @@ def run_producer(args):
     next_report = 50000
     start = time.monotonic()
     batch: list[str] = []
+    current_batch_size = get_target_batch_size(0.0)
 
     try:
         print(
@@ -36,7 +51,10 @@ def run_producer(args):
             f"redis_url={args.redis_url} | "
             f"redis_key={args.redis_key} | "
             f"max_runtime={args.max_runtime}s | "
-            f"batch_size={args.redis_batch_size} | "
+            f"rest_batch_size={REST_BATCH_SIZE} | "
+            f"spike_batch_size={SPIKE_BATCH_SIZE} | "
+            f"spike_start={SPIKE_START_SECONDS}s | "
+            f"spike_end={SPIKE_END_SECONDS}s | "
             f"send_end_sentinel={args.send_end_sentinel} | "
             f"clear_key_on_start={args.clear_key_on_start}"
         )
@@ -55,8 +73,16 @@ def run_producer(args):
                 if not edge:
                     continue
 
+                elapsed = time.monotonic() - start
+                target_batch_size = get_target_batch_size(elapsed)
+                if target_batch_size != current_batch_size:
+                    current_batch_size = target_batch_size
+                    print(
+                        f"Switched producer batch size to {current_batch_size} after {elapsed:.1f}s"
+                    )
+
                 batch.append(edge)
-                if len(batch) >= args.redis_batch_size:
+                if len(batch) >= current_batch_size:
                     wait_for_queue_capacity(client, args.redis_key)
                     sent += flush_batch(client, args.redis_key, batch)
                     while sent >= next_report:
@@ -99,8 +125,8 @@ def main():
     parser.add_argument(
         "--redis-batch-size",
         type=int,
-        default=2000,
-        help="Number of edges to publish per Redis RPUSH call",
+        default=REST_BATCH_SIZE,
+        help="Legacy fixed batch size; kept for compatibility",
     )
     parser.add_argument(
         "--clear-key-on-start",
@@ -111,6 +137,10 @@ def main():
 
     if args.redis_batch_size <= 0:
         raise ValueError("--redis-batch-size must be greater than 0")
+    if REST_BATCH_SIZE <= 0 or SPIKE_BATCH_SIZE <= 0:
+        raise ValueError("REST_BATCH_SIZE and SPIKE_BATCH_SIZE must be greater than 0")
+    if SPIKE_END_SECONDS <= SPIKE_START_SECONDS:
+        raise ValueError("SPIKE_END_SECONDS must be greater than SPIKE_START_SECONDS")
 
     run_producer(args)
 
